@@ -1,0 +1,13 @@
+name: LCA_rubrica
+title: LCA_rubrica
+username:
+account: edlin
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 6269078
+bundleId: 6493801
+url: https://edlin.shinyapps.io/LCA_rubrica/
+when: 1668002470.64212
+lastSyncTime: 1668002470.64215
+asMultiple: FALSE
+asStatic: FALSE
