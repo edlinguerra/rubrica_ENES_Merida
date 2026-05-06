@@ -15,13 +15,17 @@ library(purrr)
 # funciones preliminares --------------------------------------------------
 
 valores <- function(temp2, rubrica, catalogo_perfiles) {
-  library(dplyr)
-  library(stringr)
-  library(tidyr)
   
-  #-----------------------------
-  # 1. Normalizar nombres de variables del formulario
-  #-----------------------------
+  library(dplyr)
+  library(tidyr)
+  library(stringr)
+  library(purrr)
+  library(janitor)
+  
+  # ============================================================
+  # 0. NORMALIZAR NOMBRES DEL FORMULARIO
+  # ============================================================
+  
   datos <- temp2 |>
     rename(
       antiguedad      = `Antigüedad impartiendo esta asignatura en esta licenciatura`,
@@ -35,184 +39,185 @@ valores <- function(temp2, rubrica, catalogo_perfiles) {
       cons_part       = `Proyectos de Servicio o Consultoría en el campo de conocimiento de la asignatura, de los que ha sido Participante:`,
       productos       = `Productos académicos, técnicos o profesionales relevantes para la asignatura`,
       perfil_form     = `Perfil de formación profesional`
-    )
-  
-  # si tu asignatura es "0507 ECONOMIA ECOLOGICA", extrae la clave numérica
-  datos <- datos |>
+    ) |>
     mutate(
       clv_materia = str_extract(asignatura, "^[0-9]{3,4}")
     )
   
-  #-----------------------------
-  # 2. Preparar rúbrica compilada por tipo
-  #-----------------------------
-  rub_comp <- rubrica
+  # ============================================================
+  # 1. PREPARAR RÚBRICA
+  # ============================================================
   
-  rub_docencia   <- rub_comp |> filter(tipo == "docencia")
-  rub_antiguedad <- rub_comp |> filter(tipo == "antiguedad")
-  rub_experiencia<- rub_comp |> filter(tipo == "experiencia")
-  rub_perfiles   <- rub_comp |> filter(tipo == "perfiles")
+  rub_doc <- rubrica |> filter(tipo == "docencia")
+  rub_ant <- rubrica |> filter(tipo == "antiguedad")
+  rub_exp <- rubrica |> filter(tipo == "experiencia")
+  rub_per <- rubrica |> filter(tipo == "perfiles")
   
-  # función auxiliar para mapear una variable a la rúbrica
-  mapear_rubrica <- function(df, rub, var_nombre, sufijo) {
-    var_sym <- rlang::sym(var_nombre)
-    rub_var <- rub |> filter(variable == var_nombre) |> 
-      select(valor, puntos)
-    
-    df |>
-      left_join(rub_var, by = c(!!var_sym := "valor")) |>
-      rename(!!paste0("PTS_", sufijo) := puntos)
-  }
+  # ============================================================
+  # 2. PREPARAR CATÁLOGO DE PERFILES
+  # ============================================================
   
-  #-----------------------------
-  # 3. Módulo de pertinencia (perfiles)
-  #-----------------------------
-  # 3.1. Catalogo de perfiles en formato largo
   cat_long <- catalogo_perfiles |>
-    # ajusta nombres si difieren
-    rename(clv_materia = clv_materia) |>
+    clean_names() |>
     pivot_longer(
-      cols = c(FMT, BQ, MS, CE, H, SS, AF, IDT, I),
-      names_to  = "area_abbr",
+      cols = c(fmt, bq, ms, ce, h, ss, af, idt, i),
+      names_to = "area_abbr",
       values_to = "nivel"
     ) |>
     mutate(
       nivel = if_else(is.na(nivel) | nivel == "", "INS", nivel)
     )
   
-  # 3.2. Separar áreas del perfil del profesor y mapear a abreviaturas
+  # ============================================================
+  # 3. PROCESAR PERFIL PROFESIONAL DEL PROFESOR
+  # ============================================================
+  
   datos <- datos |>
     mutate(
       area1 = str_trim(str_split_fixed(perfil_form, ",", 2)[,1]),
       area2 = str_trim(str_split_fixed(perfil_form, ",", 2)[,2]),
-      area1_abbr = dplyr::recode(
-        area1,
-        "Físico-Matemáticas y Ciencias de la Tierra" = "FMT",
-        "Biología y Química"                         = "BQ",
-        "Medicina y Ciencias de la Salud"            = "MS",
-        "Ciencias de la Conducta y la Educación"     = "CE",
-        "Humanidades"                                = "H",
-        "Ciencias Sociales"                          = "SS",
-        "Agricultura, Agropecuarias, Forestales, y de Ecosistemas" = "AF",
-        "Ingenierías y Desarrollo Tecnológico"       = "IDT",
-        "Interdisciplinaria"                         = "I",
-        .default = NA_character_
+      area1_abbr = recode(area1,
+                          "Físico-Matemáticas y Ciencias de la Tierra" = "FMT",
+                          "Biología y Química" = "BQ",
+                          "Medicina y Ciencias de la Salud" = "MS",
+                          "Ciencias de la Conducta y la Educación" = "CE",
+                          "Humanidades" = "H",
+                          "Ciencias Sociales" = "SS",
+                          "Agricultura, Agropecuarias, Forestales, y de Ecosistemas" = "AF",
+                          "Ingenierías y Desarrollo Tecnológico" = "IDT",
+                          "Interdisciplinaria" = "I",
+                          .default = NA_character_
       ),
-      area2_abbr = dplyr::recode(
-        area2,
-        "Físico-Matemáticas y Ciencias de la Tierra" = "FMT",
-        "Biología y Química"                         = "BQ",
-        "Medicina y Ciencias de la Salud"            = "MS",
-        "Ciencias de la Conducta y la Educación"     = "CE",
-        "Humanidades"                                = "H",
-        "Ciencias Sociales"                          = "SS",
-        "Agricultura, Agropecuarias, Forestales, y de Ecosistemas" = "AF",
-        "Ingenierías y Desarrollo Tecnológico"       = "IDT",
-        "Interdisciplinaria"                         = "I",
-        .default = NA_character_
+      area2_abbr = recode(area2,
+                          "Físico-Matemáticas y Ciencias de la Tierra" = "FMT",
+                          "Biología y Química" = "BQ",
+                          "Medicina y Ciencias de la Salud" = "MS",
+                          "Ciencias de la Conducta y la Educación" = "CE",
+                          "Humanidades" = "H",
+                          "Ciencias Sociales" = "SS",
+                          "Agricultura, Agropecuarias, Forestales, y de Ecosistemas" = "AF",
+                          "Ingenierías y Desarrollo Tecnológico" = "IDT",
+                          "Interdisciplinaria" = "I",
+                          .default = NA_character_
       )
     )
   
-  # 3.3. Cruzar áreas del profesor con el catálogo y obtener el mejor nivel
+  # ============================================================
+  # 4. CALCULAR PERTINENCIA
+  # ============================================================
+  
   pertinencia <- datos |>
     select(ID_solicitud, profesor, asignatura, clv_materia,
            area1_abbr, area2_abbr) |>
     pivot_longer(
       cols = c(area1_abbr, area2_abbr),
-      names_to  = "which",
+      names_to = "which",
       values_to = "area_abbr",
       values_drop_na = TRUE
     ) |>
     left_join(cat_long, by = c("clv_materia", "area_abbr")) |>
     mutate(
-      nivel = if_else(is.na(nivel) | nivel == "", "INS", nivel),
-      nivel = factor(
-        nivel,
-        levels = c("INS", "PAR", "MED", "ALT", "DIR"),
-        ordered = TRUE
-      )
+      nivel = if_else(is.na(nivel), "INS", nivel),
+      nivel = factor(nivel, levels = c("INS","PAR","MED","ALT","DIR"), ordered = TRUE)
     ) |>
     group_by(ID_solicitud, profesor, asignatura) |>
-    summarise(
-      nivel_max = as.character(max(nivel)),
-      .groups = "drop"
-    )
+    summarise(nivel_max = as.character(max(nivel)), .groups = "drop")
   
   datos <- datos |>
     left_join(pertinencia,
-              by = c("ID_solicitud", "profesor", "asignatura")) |>
-    mutate(
-      nivel_max = replace_na(nivel_max, "INS")
-    ) |>
+              by = c("ID_solicitud","profesor","asignatura")) |>
+    mutate(nivel_max = replace_na(nivel_max, "INS")) |>
     left_join(
-      rub_perfiles |> select(valor, puntos),
+      rub_per |> select(valor, puntos),
       by = c("nivel_max" = "valor")
     ) |>
     rename(PTS_PERTINENCIA = puntos)
   
-  #-----------------------------
-  # 4. Aplicar rúbrica a docencia, antigüedad y experiencia
-  #-----------------------------
-  # Docencia: nombramiento, adscripcion, estudios, papime_resp, papime_part, cursos
+  # ============================================================
+  # 5. APLICAR RÚBRICA A TODAS LAS VARIABLES
+  # ============================================================
+  
+  mapear <- function(df, rub, var, sufijo) {
+    df |>
+      left_join(
+        rub |> filter(variable == var) |> select(valor, puntos),
+        by = c({{var}} := "valor")
+      ) |>
+      rename(!!paste0("PTS_", sufijo) := puntos)
+  }
+  
   datos <- datos |>
-    mapear_rubrica(rub_docencia, "nombramiento",   "NOMBRAMIENTO") |>
-    mapear_rubrica(rub_docencia, "adscripcion",    "ADSCRIPCION") |>
-    mapear_rubrica(rub_docencia, "estudios",       "ESTUDIOS") |>
-    mapear_rubrica(rub_docencia, "papime_resp",    "PAPIME_RESP") |>
-    mapear_rubrica(rub_docencia, "papime_part",    "PAPIME_PART") |>
-    mapear_rubrica(rub_docencia, "cursos",         "CURSOS")
+    mapear(rub_doc, "nombramiento",   "NOMBRAMIENTO") |>
+    mapear(rub_doc, "adscripcion",    "ADSCRIPCION") |>
+    mapear(rub_doc, "estudios",       "ESTUDIOS") |>
+    mapear(rub_doc, "papime_resp",    "PAPIME_RESP") |>
+    mapear(rub_doc, "papime_part",    "PAPIME_PART") |>
+    mapear(rub_doc, "cursos",         "CURSOS") |>
+    mapear(rub_ant, "antiguedad",     "ANTIGUEDAD") |>
+    mapear(rub_ant, "antiguedad_otro","ANTIG_OTRO") |>
+    mapear(rub_exp, "inv_resp",       "INV_RESP") |>
+    mapear(rub_exp, "inv_part",       "INV_PART") |>
+    mapear(rub_exp, "cons_resp",      "CONS_RESP") |>
+    mapear(rub_exp, "cons_part",      "CONS_PART") |>
+    mapear(rub_exp, "productos",      "PRODUCTOS")
+  
+  # ============================================================
+  # 6. PUNTAJE POR PROFESOR (sin ponderar)
+  # ============================================================
   
   datos <- datos |>
     mutate(
-      PTS_DOCENCIA = rowSums(across(starts_with("PTS_") &
-                                      c("PTS_NOMBRAMIENTO",
-                                        "PTS_ADSCRIPCION",
-                                        "PTS_ESTUDIOS",
-                                        "PTS_PAPIME_RESP",
-                                        "PTS_PAPIME_PART",
-                                        "PTS_CURSOS")),
-                             na.rm = TRUE)
+      PTS_DOCENCIA =
+        rowSums(across(c(PTS_NOMBRAMIENTO, PTS_ADSCRIPCION, PTS_ESTUDIOS,
+                         PTS_PAPIME_RESP, PTS_PAPIME_PART, PTS_CURSOS)),
+                na.rm = TRUE),
+      PTS_ANTIGUEDAD =
+        rowSums(across(c(PTS_ANTIGUEDAD, PTS_ANTIG_OTRO)), na.rm = TRUE),
+      PTS_EXPERIENCIA =
+        rowSums(across(c(PTS_INV_RESP, PTS_INV_PART,
+                         PTS_CONS_RESP, PTS_CONS_PART,
+                         PTS_PRODUCTOS)), na.rm = TRUE),
+      PTS_PROFESOR =
+        PTS_DOCENCIA + PTS_ANTIGUEDAD + PTS_EXPERIENCIA + PTS_PERTINENCIA
     )
   
-  # Antigüedad: asignatura y otras
-  datos <- datos |>
-    mapear_rubrica(rub_antiguedad, "antiguedad",      "ANTIGUEDAD") |>
-    mapear_rubrica(rub_antiguedad, "antiguedad_otro", "ANTIGUEDAD_OTRO") |>
-    mutate(
-      PTS_ANTIGUEDAD = rowSums(across(c(PTS_ANTIGUEDAD, PTS_ANTIGUEDAD_OTRO)),
-                               na.rm = TRUE)
-    )
+  # ============================================================
+  # 7. PONDERACIÓN POR HORAS (CORRECTA)
+  # ============================================================
   
-  # Experiencia: inv_resp, inv_part, cons_resp, cons_part, productos
-  datos <- datos |>
-    mapear_rubrica(rub_experiencia, "inv_resp",   "INV_RESP") |>
-    mapear_rubrica(rub_experiencia, "inv_part",   "INV_PART") |>
-    mapear_rubrica(rub_experiencia, "cons_resp",  "CONS_RESP") |>
-    mapear_rubrica(rub_experiencia, "cons_part",  "CONS_PART") |>
-    mapear_rubrica(rub_experiencia, "productos",  "PRODUCTOS") |>
-    mutate(
-      PTS_EXPERIENCIA = rowSums(across(c(PTS_INV_RESP,
-                                         PTS_INV_PART,
-                                         PTS_CONS_RESP,
-                                         PTS_CONS_PART,
-                                         PTS_PRODUCTOS)),
-                                na.rm = TRUE)
-    )
-  
-  #-----------------------------
-  # 5. Puntaje total por profesor (sin ponderar horas todavía)
-  #-----------------------------
   datos <- datos |>
     mutate(
-      PTS_CONDICION = 0,  # si ya no usas condición/h-index, lo dejas en 0 o lo eliminas
-      PTS_PROFESOR  = PTS_CONDICION +
-        PTS_ANTIGUEDAD +
-        PTS_DOCENCIA +
-        PTS_EXPERIENCIA +
-        PTS_PERTINENCIA
+      HORAS_PROFESOR = as.numeric(horas_t) + as.numeric(horas_p)
+    ) |>
+    group_by(ID_solicitud, asignatura) |>
+    mutate(
+      HORAS_TOTALES_ASIG = sum(HORAS_PROFESOR, na.rm = TRUE),
+      PESO_PROFESOR = if_else(HORAS_TOTALES_ASIG > 0,
+                              HORAS_PROFESOR / HORAS_TOTALES_ASIG,
+                              0),
+      PTS_PROFESOR_POND = PTS_PROFESOR * PESO_PROFESOR
+    ) |>
+    ungroup()
+  
+  # ============================================================
+  # 8. PUNTAJE FINAL DE LA SOLICITUD
+  # ============================================================
+  
+  temp_solicitud <- datos |>
+    group_by(ID_solicitud, asignatura, semestre_grupo) |>
+    summarise(
+      PTS_SOLICITUD = sum(PTS_PROFESOR_POND, na.rm = TRUE),
+      .groups = "drop"
     )
   
-  datos
+  # ============================================================
+  # 9. DEVOLVER AMBOS NIVELES
+  # ============================================================
+  
+  list(
+    por_profesor  = datos,
+    por_solicitud = temp_solicitud
+  )
 }
 
 
