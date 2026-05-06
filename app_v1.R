@@ -14,282 +14,207 @@ library(purrr)
 
 # funciones preliminares --------------------------------------------------
 
-profile <- safely(get_profile)
-hindex <- function(x){
-  id <- profile(x)
-  if(is.null(id$result)){
-    return(0)
+valores <- function(temp2, rubrica, catalogo_perfiles) {
+  library(dplyr)
+  library(stringr)
+  library(tidyr)
+  
+  #-----------------------------
+  # 1. Normalizar nombres de variables del formulario
+  #-----------------------------
+  datos <- temp2 |>
+    rename(
+      antiguedad      = `Antigüedad impartiendo esta asignatura en esta licenciatura`,
+      antiguedad_otro = `Experiencia impartiendo asignaturas similares en otros programas de licenciatura`,
+      papime_resp     = `Responsable de proyectos PAPIME en la enseñanza de esta asignatura o asignatura afín`,
+      papime_part     = `Participación en proyectos PAPIME en la enseñanza de esta asignatura o asignatura afín`,
+      cursos          = `Número de Cursos de Actualización Docente con duración superior a 20 horas en los últimos 5 años`,
+      inv_resp        = `Proyectos de Investigación con financiamiento en el campo de conocimiento de la asignatura, de los que ha sido Responsable Técnico o Coordinador:`,
+      inv_part        = `Proyectos de Investigación con financiamiento en el campo de conocimiento de la asignatura, de los que ha sido Participante:`,
+      cons_resp       = `Proyectos de Servicio o Consultoría en el campo de conocimiento de la asignatura, de los que ha sido Responsable Técnico o Coordinador:`,
+      cons_part       = `Proyectos de Servicio o Consultoría en el campo de conocimiento de la asignatura, de los que ha sido Participante:`,
+      productos       = `Productos académicos, técnicos o profesionales relevantes para la asignatura`,
+      perfil_form     = `Perfil de formación profesional`
+    )
+  
+  # si tu asignatura es "0507 ECONOMIA ECOLOGICA", extrae la clave numérica
+  datos <- datos |>
+    mutate(
+      clv_materia = str_extract(asignatura, "^[0-9]{3,4}")
+    )
+  
+  #-----------------------------
+  # 2. Preparar rúbrica compilada por tipo
+  #-----------------------------
+  rub_comp <- rubrica
+  
+  rub_docencia   <- rub_comp |> filter(tipo == "docencia")
+  rub_antiguedad <- rub_comp |> filter(tipo == "antiguedad")
+  rub_experiencia<- rub_comp |> filter(tipo == "experiencia")
+  rub_perfiles   <- rub_comp |> filter(tipo == "perfiles")
+  
+  # función auxiliar para mapear una variable a la rúbrica
+  mapear_rubrica <- function(df, rub, var_nombre, sufijo) {
+    var_sym <- rlang::sym(var_nombre)
+    rub_var <- rub |> filter(variable == var_nombre) |> 
+      select(valor, puntos)
+    
+    df |>
+      left_join(rub_var, by = c(!!var_sym := "valor")) |>
+      rename(!!paste0("PTS_", sufijo) := puntos)
   }
-  if(is.na(id$result)){
-    return(0)
-  }
-  else{return(id$result$h_index)
-  }
+  
+  #-----------------------------
+  # 3. Módulo de pertinencia (perfiles)
+  #-----------------------------
+  # 3.1. Catalogo de perfiles en formato largo
+  cat_long <- catalogo_perfiles |>
+    # ajusta nombres si difieren
+    rename(clv_materia = clv_materia) |>
+    pivot_longer(
+      cols = c(FMT, BQ, MS, CE, H, SS, AF, IDT, I),
+      names_to  = "area_abbr",
+      values_to = "nivel"
+    ) |>
+    mutate(
+      nivel = if_else(is.na(nivel) | nivel == "", "INS", nivel)
+    )
+  
+  # 3.2. Separar áreas del perfil del profesor y mapear a abreviaturas
+  datos <- datos |>
+    mutate(
+      area1 = str_trim(str_split_fixed(perfil_form, ",", 2)[,1]),
+      area2 = str_trim(str_split_fixed(perfil_form, ",", 2)[,2]),
+      area1_abbr = dplyr::recode(
+        area1,
+        "Físico-Matemáticas y Ciencias de la Tierra" = "FMT",
+        "Biología y Química"                         = "BQ",
+        "Medicina y Ciencias de la Salud"            = "MS",
+        "Ciencias de la Conducta y la Educación"     = "CE",
+        "Humanidades"                                = "H",
+        "Ciencias Sociales"                          = "SS",
+        "Agricultura, Agropecuarias, Forestales, y de Ecosistemas" = "AF",
+        "Ingenierías y Desarrollo Tecnológico"       = "IDT",
+        "Interdisciplinaria"                         = "I",
+        .default = NA_character_
+      ),
+      area2_abbr = dplyr::recode(
+        area2,
+        "Físico-Matemáticas y Ciencias de la Tierra" = "FMT",
+        "Biología y Química"                         = "BQ",
+        "Medicina y Ciencias de la Salud"            = "MS",
+        "Ciencias de la Conducta y la Educación"     = "CE",
+        "Humanidades"                                = "H",
+        "Ciencias Sociales"                          = "SS",
+        "Agricultura, Agropecuarias, Forestales, y de Ecosistemas" = "AF",
+        "Ingenierías y Desarrollo Tecnológico"       = "IDT",
+        "Interdisciplinaria"                         = "I",
+        .default = NA_character_
+      )
+    )
+  
+  # 3.3. Cruzar áreas del profesor con el catálogo y obtener el mejor nivel
+  pertinencia <- datos |>
+    select(ID_solicitud, profesor, asignatura, clv_materia,
+           area1_abbr, area2_abbr) |>
+    pivot_longer(
+      cols = c(area1_abbr, area2_abbr),
+      names_to  = "which",
+      values_to = "area_abbr",
+      values_drop_na = TRUE
+    ) |>
+    left_join(cat_long, by = c("clv_materia", "area_abbr")) |>
+    mutate(
+      nivel = if_else(is.na(nivel) | nivel == "", "INS", nivel),
+      nivel = factor(
+        nivel,
+        levels = c("INS", "PAR", "MED", "ALT", "DIR"),
+        ordered = TRUE
+      )
+    ) |>
+    group_by(ID_solicitud, profesor, asignatura) |>
+    summarise(
+      nivel_max = as.character(max(nivel)),
+      .groups = "drop"
+    )
+  
+  datos <- datos |>
+    left_join(pertinencia,
+              by = c("ID_solicitud", "profesor", "asignatura")) |>
+    mutate(
+      nivel_max = replace_na(nivel_max, "INS")
+    ) |>
+    left_join(
+      rub_perfiles |> select(valor, puntos),
+      by = c("nivel_max" = "valor")
+    ) |>
+    rename(PTS_PERTINENCIA = puntos)
+  
+  #-----------------------------
+  # 4. Aplicar rúbrica a docencia, antigüedad y experiencia
+  #-----------------------------
+  # Docencia: nombramiento, adscripcion, estudios, papime_resp, papime_part, cursos
+  datos <- datos |>
+    mapear_rubrica(rub_docencia, "nombramiento",   "NOMBRAMIENTO") |>
+    mapear_rubrica(rub_docencia, "adscripcion",    "ADSCRIPCION") |>
+    mapear_rubrica(rub_docencia, "estudios",       "ESTUDIOS") |>
+    mapear_rubrica(rub_docencia, "papime_resp",    "PAPIME_RESP") |>
+    mapear_rubrica(rub_docencia, "papime_part",    "PAPIME_PART") |>
+    mapear_rubrica(rub_docencia, "cursos",         "CURSOS")
+  
+  datos <- datos |>
+    mutate(
+      PTS_DOCENCIA = rowSums(across(starts_with("PTS_") &
+                                      c("PTS_NOMBRAMIENTO",
+                                        "PTS_ADSCRIPCION",
+                                        "PTS_ESTUDIOS",
+                                        "PTS_PAPIME_RESP",
+                                        "PTS_PAPIME_PART",
+                                        "PTS_CURSOS")),
+                             na.rm = TRUE)
+    )
+  
+  # Antigüedad: asignatura y otras
+  datos <- datos |>
+    mapear_rubrica(rub_antiguedad, "antiguedad",      "ANTIGUEDAD") |>
+    mapear_rubrica(rub_antiguedad, "antiguedad_otro", "ANTIGUEDAD_OTRO") |>
+    mutate(
+      PTS_ANTIGUEDAD = rowSums(across(c(PTS_ANTIGUEDAD, PTS_ANTIGUEDAD_OTRO)),
+                               na.rm = TRUE)
+    )
+  
+  # Experiencia: inv_resp, inv_part, cons_resp, cons_part, productos
+  datos <- datos |>
+    mapear_rubrica(rub_experiencia, "inv_resp",   "INV_RESP") |>
+    mapear_rubrica(rub_experiencia, "inv_part",   "INV_PART") |>
+    mapear_rubrica(rub_experiencia, "cons_resp",  "CONS_RESP") |>
+    mapear_rubrica(rub_experiencia, "cons_part",  "CONS_PART") |>
+    mapear_rubrica(rub_experiencia, "productos",  "PRODUCTOS") |>
+    mutate(
+      PTS_EXPERIENCIA = rowSums(across(c(PTS_INV_RESP,
+                                         PTS_INV_PART,
+                                         PTS_CONS_RESP,
+                                         PTS_CONS_PART,
+                                         PTS_PRODUCTOS)),
+                                na.rm = TRUE)
+    )
+  
+  #-----------------------------
+  # 5. Puntaje total por profesor (sin ponderar horas todavía)
+  #-----------------------------
+  datos <- datos |>
+    mutate(
+      PTS_CONDICION = 0,  # si ya no usas condición/h-index, lo dejas en 0 o lo eliminas
+      PTS_PROFESOR  = PTS_CONDICION +
+        PTS_ANTIGUEDAD +
+        PTS_DOCENCIA +
+        PTS_EXPERIENCIA +
+        PTS_PERTINENCIA
+    )
+  
+  datos
 }
 
-valores <- function(temp2, rubrica){
-  cond <- rubrica %>% 
-    filter(tipo == "condicion")
-  
- # esq <- rubrica %>% 
- #  filter(tipo == "esquema")
-  
-  ant <- rubrica %>% 
-    filter(tipo == "antiguedad")
-  
-  docen <- rubrica %>% 
-    filter(tipo == "docencia")
-  
-  exp <- rubrica %>% 
-    filter(tipo == "experiencia")
-  
-  
-  temp3 <- temp2 %>% 
-    mutate(pts_nombramiento = rep(NA, nrow(temp2)),
-           pts_adscripcion = rep(NA, nrow(temp2)),
-           pts_estudios = rep(NA, nrow(temp2)))
-  
-  #nombramiento
-  for (i in 1:nrow(temp3)){
-    for (l in 1:nrow(cond)){
-      if (temp3$nombramiento[i] == cond$valor[l]){
-        temp3$pts_nombramiento[i] <- cond$puntos[l]
-      }
-    }}
-  
-  #adscripción
-  for (i in 1:nrow(temp3)){
-    for (l in 1:nrow(cond)){
-      if (temp3$adscripcion[i] == cond$valor[l]){
-        temp3$pts_adscripcion[i] <- cond$puntos[l]
-      }
-    }}
-  
-  for (i in 1:nrow(temp3)){
-    if (is.na(temp3$pts_adscripcion[i])){
-      temp3$pts_adscripcion[i] <- 5
-    }
-  }
-  
-  #estudios
-  for (i in 1:nrow(temp3)){
-    for (l in 1:nrow(cond)){
-      if (temp3$estudios[i] == cond$valor[l]){
-        temp3$pts_estudios[i] <- cond$puntos[l]
-      }
-    }}
-  
-  for (i in 1:nrow(temp3)){
-    if (is.na(temp3$pts_estudios[i])){
-      temp3$pts_estudios[i] <- 1 
-    }
-  }
-  
-  temp3 <- temp3 %>%
-    group_by(marca,profesor)  %>%
-    mutate(PTS_CONDICION = sum(pts_nombramiento,pts_adscripcion, pts_estudios)) %>%
-    ungroup()
-  
-  ##Esquema de enseñanza
-  # temp3 <- temp3 %>% 
-  #   mutate(pts_esquema = rep(NA, nrow(temp3)))
-  # 
-  # for (i in 1:nrow(temp3)){
-  #   for (l in 1:nrow(esq)){
-  #     if (temp3$esquema[i] == esq$valor[l]){
-  #       temp3$pts_esquema[i] <- esq$puntos[l]
-  #     }
-  #   }}
-  # 
-  # temp3 <- temp3 %>% 
-  #   group_by(marca,profesor) %>%
-  #   mutate(PTS_ESQUEMA = pts_esquema) %>%
-  #   ungroup()
-  
-  ## Antigüedad impartiendo la asignatura
-  temp3 <- temp3 %>% 
-    mutate(pts_a_lic = rep(NA, nrow(temp3)),
-           pts_a_otra = rep(NA, nrow(temp3)))
-  
-  #En la licenciatura
-  anta <- ant %>%
-    filter(variable == "antiguedad_lca")
-  
-  for (i in 1:nrow(temp3)){
-    for (l in 1:nrow(anta)){
-      if (temp3$antiguedad_lca[i] == anta$valor[l]){
-        temp3$pts_a_lic[i] <- anta$puntos[l]
-      }
-    }}
-  
-  #En otra licenciatura
-  antb <- ant %>%
-    filter(variable == "antiguedad_otro")
-  
-  for (i in 1:nrow(temp3)){
-    for (l in 1:nrow(antb)){
-      if (temp3$antiguedad_otro[i] == antb$valor[l]){
-        temp3$pts_a_otra[i] <- antb$puntos[l]
-      }
-    }}
-  
-  temp3 <- temp3 %>% 
-    group_by(marca,profesor) %>%
-    mutate(PTS_ANTIGUEDAD = sum(pts_a_lic,pts_a_otra)) %>%
-    ungroup()
-  
-  ## Elementos del CV relacionados con la actividad docente
-  temp3 <- temp3 %>% 
-    mutate(pts_rpapime = rep(NA, nrow(temp3)),
-           pts_ppapime = rep(NA, nrow(temp3)),
-           pts_cursos = rep(NA, nrow(temp3)))
-  
-  #Responsabilidad en PAPIME o equivalente
-  docena <- docen %>% 
-    filter(variable == "papime_resp")
-  
-  for (i in 1:nrow(temp3)){
-    for (l in 1:nrow(docena)){
-      if (temp3$papime_resp[i] == docena$valor[l]){
-        temp3$pts_rpapime[i] <-  docena$puntos[l]
-      }
-    }
-  }
-  
-  #Participación en PAPIME o equivalente
-  docenb <- docen %>% 
-    filter(variable == "papime_part")
-  
-  
-  for (i in 1:nrow(temp3)){
-    for (l in 1:nrow(docenb)){
-      if (temp3$papime_part[i] == docenb$valor[l]){
-        temp3$pts_ppapime[i] <-  docenb$puntos[l]
-      }
-    }
-  }      
-  
-  #cursos de mejoramiento docente
-  docenc <- docen %>% 
-    filter(variable == "cursos")
-  
-  for (i in 1:nrow(temp3)){
-    for (l in 1:nrow(docenc)){
-      if (temp3$cursos[i] == docenc$valor[l]){
-        temp3$pts_cursos[i] <-  docenc$puntos[l]
-      }
-    }
-  }   
-  
-  temp3 <- temp3 %>% 
-    group_by(marca,profesor) %>%
-    mutate(PTS_DOCENCIA = sum(pts_rpapime, pts_ppapime, pts_cursos)) %>%
-    ungroup()
-  
-  ## Elementos del CV relacionados con la actividad profesional
-  temp3 <- temp3 %>% 
-    mutate(pts_inv_r = rep(NA, nrow(temp3)),
-           pts_inv_p = rep(NA, nrow(temp3)),
-           pts_con_r = rep(NA, nrow(temp3)),
-           pts_con_p = rep(NA, nrow(temp3)),
-           pts_prod = rep(NA, nrow(temp3)),
-           pts_hindex = rep(NA, nrow(temp3)))
-  
-  #Responsabilidad en proyectos de investigación financiados
-  expa <- exp %>%
-    filter(variable == "inv_resp")
-  
-  for (i in 1:nrow(temp3)){
-    for (l in 1:nrow(expa)){
-      if (temp3$inv_resp[i] == expa$valor[l]){
-        temp3$pts_inv_r[i] <- expa$puntos[l]
-      }
-    }}
-  
-  #Participación en proyectos de investigación financiados
-  expb <- exp %>%
-    filter(variable == "inv_part")
-  
-  for (i in 1:nrow(temp3)){
-    for (l in 1:nrow(expb)){
-      if (temp3$inv_part[i] == expb$valor[l]){
-        temp3$pts_inv_p[i] <- expb$puntos[l]
-      }
-    }}
-  
-  #Responsabilidad en proyectos de consultoría o servicio técnico
-  expc <- exp %>%
-    filter(variable == "cons_resp")
-  
-  for (i in 1:nrow(temp3)){
-    for (l in 1:nrow(expc)){
-      if (temp3$cons_resp[i] == expc$valor[l]){
-        temp3$pts_con_r[i] <- expc$puntos[l]
-      }
-    }}
-  
-  #Participación en proyectos de consultoría o servicio técnico
-  expd <- exp %>%
-    filter(variable == "cons_part")
-  
-  for (i in 1:nrow(temp3)){
-    for (l in 1:nrow(expd)){
-      if (temp3$cons_part[i] == expd$valor[l]){
-        temp3$pts_con_p[i] <- expd$puntos[l]
-      }
-    }}
-  
-  #Número de productos académicos (artículos arbitrados, patentes, libros, etc.)
-  expe <- exp %>%
-    filter(variable == "productos")
-  
-  for (i in 1:nrow(temp3)){
-    for (l in 1:nrow(expe)){
-      if (temp3$productos[i] == expe$valor[l]){
-        temp3$pts_prod[i] <- expe$puntos[l]
-      }
-    }}
-  
-  #Impacto académico en investigación basado en h-index de Google Scholar
-  expf <- exp %>%
-    filter(variable == "h_index") %>% 
-    mutate(valor = as.numeric(valor))
-  
-  for (i in 1:nrow(temp3)){
-    for (l in 1:nrow(expf)){
-      if (temp3$h_index[i] == 0){
-        temp3$pts_hindex[i] <- 0
-      }
-      if (between(temp3$h_index[i], 1, 4)){
-        temp3$pts_hindex[i] <- 0.5
-      } 
-      if(between(temp3$h_index[i], 5, 9)){
-        temp3$pts_hindex[i] <- 1
-      }
-      if(between(temp3$h_index[i], 10, 14)){
-        temp3$pts_hindex[i] <- 1.5
-      }
-      if(between(temp3$h_index[i], 15, 19)){
-        temp3$pts_hindex[i] <- 2
-      }
-      if(between(temp3$h_index[i], 20, 500)){
-        temp3$pts_hindex[i] <- 2.5
-      }
-    }
-  }
-  
-  temp3 <- temp3 %>% 
-    group_by(marca,profesor) %>%
-    mutate(PTS_EXPERIENCIA = sum(pts_inv_r,
-                                 pts_inv_p,
-                                 pts_con_r,
-                                 pts_con_p,
-                                 pts_prod,
-                                 pts_hindex,
-                                 na.rm = TRUE)) %>%
-    ungroup()
-  return(temp3)
-}
 
 nomina <- function(x){
   adjudicados <- x
@@ -318,8 +243,8 @@ nomina <- function(x){
     "HP" = as.numeric(adjudicados$horas_p)
   )
   
-  xx <- yy %>% 
-    group_by(`Semestre/Grupo`, Asignatura, `Profesor(a)`) %>% 
+  xx <- yy |> 
+    group_by(`Semestre/Grupo`, Asignatura, `Profesor(a)`) |> 
     mutate("Carga Horaria" = sum(HT, HP),
            "Horas Pagadas"= if_else(Nombramiento == "Profesor de Asignatura", 
                                     true = sum(HT, HP),
@@ -327,18 +252,17 @@ nomina <- function(x){
            "correo" = if_else(str_detect(correo1, pattern = "unam.mx"),
                               correo1,
                               correo2)
-    ) %>% 
-    relocate(correo, .after = UNAM) %>% 
-    relocate(`Carga Horaria`, .before = HT) %>% 
-    select(-c(correo1, correo2)) %>% 
-    pivot_longer(cols = estudios:correo, names_to = "info", values_to = "Datos") %>% 
-    select(-c(info)) %>% 
+    ) |> 
+    relocate(correo, .after = UNAM) |> 
+    relocate(`Carga Horaria`, .before = HT) |> 
+    select(-c(correo1, correo2)) |> 
+    pivot_longer(cols = estudios:correo, names_to = "info", values_to = "Datos") |> 
+    select(-c(info)) |> 
     relocate(Datos, .after = `Profesor(a)`)
   return(xx)
 
 }
 # User interface ----------------------------------------------------------
-
 
 ui <- fluidPage(
   waiter::use_waiter(),
@@ -347,13 +271,14 @@ ui <- fluidPage(
   sidebarLayout(
     sidebarPanel(
       wellPanel(p(strong("1. Preparación de datos")),
-        fileInput("file", "Cargar formulario", accept = ".xlsx", multiple = TRUE),
-        actionButton("tidy", "Ordenar solicitudes")
+                fileInput("file", "Cargar formulario", accept = ".xlsx", multiple = TRUE),
+                actionButton("tidy", "Ordenar solicitudes")
       ),
       wellPanel(p(strong("2. Aplicación de rúbrica")),
-         fileInput("file2", label = "Cargar rúbrica", accept = ".xlsx"),
-         actionButton("rubrica", "Aplicar rúbrica"),
-         actionButton("total", "Preseleccionar")
+                fileInput("file2", label = "Cargar rúbrica", accept = ".xlsx"),
+                fileInput("file_cat", label = "Cargar catálogo", accept = ".xlsx"),
+                actionButton("rubrica", "Aplicar rúbrica"),
+                actionButton("total", "Preseleccionar")
       ),
       wellPanel(p(strong("3. Datos para nómina")),
                 fileInput("file3", label = "Cargar validaciones", accept = ".csv"),
@@ -365,7 +290,7 @@ ui <- fluidPage(
                 actionButton("desierto", "Identificar desiertas")
       ),
     ),
-  mainPanel(
+    mainPanel(
       tabsetPanel(
         tabPanel("Info", 
                  includeMarkdown("intro.md")),
@@ -393,198 +318,177 @@ ui <- fluidPage(
 )
 
 
+
 # Server ------------------------------------------------------------------
 server <- function(input, output, session) {
   
-#cargar formulario sin procesar
+  # 1. Cargar formulario sin procesar
   temp1 <- reactive({
     infile <- input$file
     import(infile$datapath, col_types = "text")
-    })
-
-#Modificar formulario  
+  })
+  
+  # 2. Modificar formulario (sin h-index)
   temp2 <- eventReactive(input$tidy, {
-    #barra de progreso
-    withProgress(message = 'buscando h-index, espere...', value = 0, {
-    # Organización de formulario y búsqueda de h-index
-      temp1() %>%
-        mutate(ID_solicitud = as.character(1:nrow(temp1()))) %>%
-        relocate(ID_solicitud, .before = marca) %>%
-        pivot_longer(cols = asignatura...5:sum(length(temp1()),1), names_to = "variable") %>%
-        mutate(variable = str_remove(string = variable, pattern = "\\...*")) %>%
-        mutate(variable = str_remove_all(string = variable,
-                                         pattern = c("_1"="",
-                                                     "_2"="",
-                                                     "_3"=""))) %>% 
-        filter(variable != "2do_prof", variable != "3er_prof") %>%
-        drop_na() %>%
-        group_by(marca, semestre_grupo, variable) %>%
-        mutate(fila = row_number()) %>%
-        pivot_wider(names_from = variable, values_from = value) %>%
-        ungroup() %>%
-        #mutate(id_gs = str_remove(string = id_gs, pattern = ".*\\=")) %>%
-        mutate(id_gs = str_remove(string = id_gs, pattern = ".*user=")) %>%
-        group_by(ID_solicitud, profesor) %>%
-        mutate(h_index = hindex(id_gs)) %>%
-        #mutate(h_index = NA) %>%
-        mutate(h_index = replace_na(h_index, 0)) %>%
-        ungroup() %>%
-        relocate(h_index, .after = id_gs) %>%
-        fill(asignatura)
-     #incProgress()
-      
+    withProgress(message = 'Ordenando solicitudes...', value = 0, {
+      temp1() |>
+        mutate(ID_solicitud = as.character(1:nrow(temp1()))) |>
+        relocate(ID_solicitud, .before = `Marca temporal`) |>
+        # ajusta nombres de columnas según tu archivo actual
+        rename(
+          marca          = `Marca temporal`,
+          semestre_grupo = `Por favor, indica el semestre y grupo en el que solicitas impartir la asignatura`,
+          profesor       = `Nombre completo (sin grados académicos ni abreviaturas)`
+        ) |>
+        # aquí va tu lógica de pivot_longer/pivot_wider original,
+        # pero sin columnas de Google Scholar
+        pivot_longer(
+          cols = starts_with("Elige la asignatura"),
+          names_to  = "variable",
+          values_to = "asignatura"
+        ) |>
+        drop_na(asignatura) |>
+        group_by(marca, semestre_grupo, variable) |>
+        mutate(fila = row_number()) |>
+        ungroup()
     })
   })
-
-#Cargar rúbrica
+  
+  # 3. Cargar rúbrica
   rubrica <- reactive({
     infile2 <- input$file2
     import(infile2$datapath, sheet = "compilada")
   })
-
   
-#Aplicar rúbrica
-temp4 <- eventReactive(input$rubrica,{
-  temp3 <- valores(temp2 = temp2(), rubrica = rubrica())
-    temp3 %>%
-    group_by(ID_solicitud,profesor) %>% 
-    mutate(PTS_PROFESOR = sum(PTS_CONDICION,
-                              PTS_ANTIGUEDAD,
-                              #PTS_ESQUEMA,
-                              PTS_DOCENCIA,
-                              PTS_EXPERIENCIA)) %>% 
-    relocate(semestre_grupo, .before = ID_solicitud) %>% 
-    relocate(asignatura, .after = semestre_grupo) %>% 
-    arrange(semestre_grupo, asignatura, ID_solicitud) %>% 
-    select(-c(marca, fila, solicitud, rfc, curp, correo_unam, correo_pers, telf, id_gs))
-    })
-
-#Estimación puntos de cada solicitud por semestre y grupo
-temp5 <- eventReactive(input$total,{
-  temp4() %>% 
-  group_by(semestre_grupo, asignatura, ID_solicitud, responsable) %>% 
-  summarise(total = mean(PTS_PROFESOR)) %>%
-  ungroup() %>% 
-  group_by(semestre_grupo, asignatura) %>% 
-  arrange(semestre_grupo, asignatura, desc(total)) %>% 
-  mutate(adjudicacion = if_else(total == max(total), "VALIDAR POR CA", "CONDICIONADA")) %>% 
-  mutate(diferencia = if_else(adjudicacion == "VALIDAR POR CA", 0, max(total)-total)) %>% 
-  ungroup()
-})
-
-#Datos nómina
-
-temp6 <- reactive({
-  infile3 <- input$file3
-  import(infile3$datapath, 
-         col_types = c("text",
-                       "text",
-                       "text",
-                       "text",
-                       "numeric",
-                       "text",
-                       "numeric"))
-})
-
-
-temp7 <- eventReactive(input$adjudicar,{
-  temp2() %>% 
-    semi_join(temp6() %>% 
-                filter(adjudicacion == "VALIDADA")) %>% 
-    relocate(semestre_grupo, .before = ID_solicitud) %>%
-    relocate(asignatura, .after = semestre_grupo) %>%
-    arrange(semestre_grupo, asignatura, ID_solicitud) %>%
-    select(ID_solicitud,semestre_grupo,asignatura,profesor,nombramiento,adscripcion,estudios,
-           rfc,curp,num_unam,correo_unam,correo_pers,telf,horas_t,horas_p)
+  # 4. Cargar catálogo (perfiles)
+  catalogo <- reactive({
+    infile_cat <- input$file_cat
+    import(infile_cat$datapath, sheet = "perfiles")
+  })
   
-})
+  # 5. Aplicar rúbrica + pertinencia
+  temp4 <- eventReactive(input$rubrica, {
+    temp3 <- valores(
+      temp2   = temp2(),
+      rubrica = rubrica(),
+      catalogo_perfiles = catalogo()
+    )
+    
+    temp3 |>
+      group_by(ID_solicitud, profesor) |>
+      # PTS_PROFESOR ya viene de valores()
+      relocate(semestre_grupo, .before = ID_solicitud) |>
+      relocate(asignatura, .after = semestre_grupo) |>
+      arrange(semestre_grupo, asignatura, ID_solicitud) |>
+      select(-c(marca, fila))
+  })
   
-
-temp8 <- eventReactive(input$nomina,{
-  nomina(temp7())
-})  
+  # 6. Estimación puntos de cada solicitud (ponderado por horas)
+  temp5 <- eventReactive(input$total, {
+    temp4() |>
+      mutate(
+        horas_tot_prof = as.numeric(horas_t) + as.numeric(horas_p)
+      ) |>
+      group_by(semestre_grupo, asignatura, ID_solicitud, responsable) |>
+      summarise(
+        total = ifelse(
+          all(is.na(horas_tot_prof)) | sum(horas_tot_prof, na.rm = TRUE) == 0,
+          mean(PTS_PROFESOR, na.rm = TRUE),
+          stats::weighted.mean(PTS_PROFESOR, w = horas_tot_prof, na.rm = TRUE)
+        ),
+        .groups = "drop"
+      ) |>
+      group_by(semestre_grupo, asignatura) |>
+      arrange(semestre_grupo, asignatura, desc(total)) |>
+      mutate(
+        adjudicacion = if_else(total == max(total), "VALIDAR POR CA", "CONDICIONADA"),
+        diferencia   = if_else(adjudicacion == "VALIDAR POR CA", 0, max(total) - total)
+      ) |>
+      ungroup()
+  })
   
+  # 7. Datos nómina (igual que antes)
+  temp6 <- reactive({
+    infile3 <- input$file3
+    import(infile3$datapath, 
+           col_types = c("text","text","text","text","numeric","text","numeric"))
+  })
   
-#Desiertas
-
-temp9 <- reactive({
-  infile4 <- input$file4
-  import(infile4$datapath)
-})
-
-temp10 <- eventReactive(input$desierto,{
-  anti_join(temp9(), temp7())
-})
-
-##########    outputs  
-output$tabla1 <- renderTable({
-  temp2()
-})
-
-output$tabla2 <- renderTable({
-  temp4()
-})
-
-output$tabla3 <- renderTable({
-  temp5()
-})
-
-output$tabla4 <- renderTable({
-  temp7()
-})
-
-output$tabla5 <- renderTable({
-  temp8()
-})
-
-output$tabla6 <- renderTable({
-  temp10()
-})
-
-output$descarga0 <- downloadHandler(
-  filename = "temp2.csv",
-  content = function(file) {
-    vroom::vroom_write(temp2(), file , delim = ",", bom = TRUE)
-  }
-)
-
-output$descarga1 <- downloadHandler(
-  filename = "valoracion_profesores.csv",
-  content = function(file) {
-    vroom::vroom_write(temp4(), file , delim = ",", bom = TRUE)
-  }
-)
-
-output$descarga2 <- downloadHandler(
-  filename = "valoracion_solicitudes.csv",
-  content = function(file) {
-    vroom::vroom_write(temp5(), file , delim = ",", bom = TRUE)
-  }
-)
-
-output$descarga3 <- downloadHandler(
-  filename = "datos_adjudicados.csv",
-  content = function(file) {
-    vroom::vroom_write(temp7(), file , delim = ",", bom = TRUE)
-  }
-)
-
-output$descarga4 <- downloadHandler(
-  filename = "datos_nomina.csv",
-  content = function(file) {
-    vroom::vroom_write(temp8(), file , delim = ",", bom = TRUE)
-  }
-)
-
-output$descarga5 <- downloadHandler(
-  filename = "asignaturas_desiertas.csv",
-  content = function(file) {
-    vroom::vroom_write(temp10(), file , delim = ",", bom = TRUE)
-  }
-)
-
+  temp7 <- eventReactive(input$adjudicar, {
+    temp2() |>
+      semi_join(temp6() |> filter(adjudicacion == "VALIDADA")) |>
+      relocate(semestre_grupo, .before = ID_solicitud) |>
+      relocate(asignatura, .after = semestre_grupo) |>
+      arrange(semestre_grupo, asignatura, ID_solicitud) |>
+      select(ID_solicitud, semestre_grupo, asignatura, profesor, nombramiento, adscripcion, estudios,
+             rfc, curp, num_unam, correo_unam, correo_pers, telf, horas_t, horas_p)
+  })
+  
+  temp8 <- eventReactive(input$nomina, {
+    nomina(temp7())
+  })
+  
+  # 8. Desiertas (igual que antes)
+  temp9 <- reactive({
+    infile4 <- input$file4
+    import(infile4$datapath)
+  })
+  
+  temp10 <- eventReactive(input$desierto, {
+    anti_join(temp9(), temp7())
+  })
+  
+  #----------------- outputs (puedes mantener renderTable o pasar a gt) -------------
+  output$tabla1 <- renderTable({ temp2() })
+  output$tabla2 <- renderTable({ temp4() })
+  output$tabla3 <- renderTable({ temp5() })
+  output$tabla4 <- renderTable({ temp7() })
+  output$tabla5 <- renderTable({ temp8() })
+  output$tabla6 <- renderTable({ temp10() })
+  
+  # descargas (ajustadas a los nuevos objetos)
+  output$descarga0 <- downloadHandler(
+    filename = "temp2.csv",
+    content = function(file) {
+      vroom::vroom_write(temp2(), file , delim = ",", bom = TRUE)
+    }
+  )
+  
+  output$descarga1 <- downloadHandler(
+    filename = "valoracion_profesores.csv",
+    content = function(file) {
+      vroom::vroom_write(temp4(), file , delim = ",", bom = TRUE)
+    }
+  )
+  
+  output$descarga2 <- downloadHandler(
+    filename = "valoracion_solicitudes.csv",
+    content = function(file) {
+      vroom::vroom_write(temp5(), file , delim = ",", bom = TRUE)
+    }
+  )
+  
+  output$descarga3 <- downloadHandler(
+    filename = "datos_adjudicados.csv",
+    content = function(file) {
+      vroom::vroom_write(temp7(), file , delim = ",", bom = TRUE)
+    }
+  )
+  
+  output$descarga4 <- downloadHandler(
+    filename = "datos_nomina.csv",
+    content = function(file) {
+      vroom::vroom_write(temp8(), file , delim = ",", bom = TRUE)
+    }
+  )
+  
+  output$descarga5 <- downloadHandler(
+    filename = "asignaturas_desiertas.csv",
+    content = function(file) {
+      vroom::vroom_write(temp10(), file , delim = ",", bom = TRUE)
+    }
+  )
 }
-
 
 # Aplicacion --------------------------------------------------------------
 
