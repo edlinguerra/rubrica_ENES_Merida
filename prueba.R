@@ -4,11 +4,11 @@
 
 #Aplica las líneas de la función valores para detectar errores e incosistencias con los archivos
 
-temp1 <- rio::import("/home/artu/Descargas/Convocatoria_Docente_ LCA-2027-1 (respuestas).xlsx", col_types = "text") 
+temp1 <- rio::import("./data/Convocatoria_Docente_ LCA-2027-1 (respuestas).xlsx", col_types = "text") 
   
-rubrica <- rio::import("/home/artu/Descargas/Rubricas_2027-1.xlsx", sheet = "compilada")
+rubrica <- rio::import("./data/Rubricas_2027-1.xlsx", sheet = "compilada")
   
-catalogo_perfiles <- rio::import("/home/artu/Descargas/CATALOGO_LCA-ENES-MERIDA.xlsx", sheet = "perfiles")
+catalogo_perfiles <- rio::import("./data/CATALOGO_LCA-ENES-MERIDA.xlsx", sheet = "perfiles")
 
 temp2 <- temp1 |> 
   mutate(id_solicitud = as.character(1:nrow(temp1))) |>
@@ -628,7 +628,7 @@ nomina <- function(x) {
 # ============================================================
 
 
-temp6 <- import("/home/artu/Descargas/valoracion_solicitudes.csv", col_types = c("text","text","text","text","numeric","text","numeric"))
+temp6 <- import("./data/valoracion_solicitudes.csv", col_types = c("text","text","text","text","numeric","text","numeric"))
 
 adjudicaciones_validas <- temp6 |> 
   janitor::clean_names() |>
@@ -681,7 +681,7 @@ temp8 <- nomina(temp7)
 # 13. PREPARA LISTA ASIGNATURAS DESIERTAS
 # ============================================================
 
-temp9 <- import("/home/artu/Descargas/desiertas.xlsx")|>
+temp9 <- import("./data/Descargas/desiertas.xlsx")|>
   janitor::clean_names() |>
   mutate(
     semestre_grupo = stringr::str_squish(as.character(semestre_grupo)),
