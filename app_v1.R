@@ -2,7 +2,7 @@
 library(shiny)
 library(vroom)
 library(waiter)
-library(gt)
+library(DT)
 library(dplyr)
 library(tidyr)
 library(shinyWidgets)
@@ -17,7 +17,7 @@ library(openxlsx)
 # funciones preliminares --------------------------------------------------
 
 leer_formulario <- function(path_csv) {
-
+  
   # ============================================================
   # 1. LEER CSV (desactivado, solo para probar fuera de la app)
   # ============================================================
@@ -194,23 +194,108 @@ leer_formulario <- function(path_csv) {
   return(df)
 }
 
-valores <- function(df, rubrica, catalogo_perfiles) {
-
-  datos <- df
+valores <- function(temp2 = NULL, df = NULL, rubrica, catalogo_perfiles) {
+  
+  library(dplyr)
+  library(tidyr)
+  library(stringr)
+  library(purrr)
+  library(janitor)
+  
+  # ============================================================
+  # 0. NORMALIZAR ENTRADA
+  # ============================================================
+  # Esta versión acepta dos formas de entrada:
+  # 1) temp2: salida del server, con profesores en columnas *_p1, *_p2, *_p3
+  # 2) df: datos ya pivoteados a formato largo por profesor
+  
+  if (is.null(df)) {
+    
+    if (is.null(temp2)) {
+      stop("Debes proporcionar `temp2` o `df` a la función valores().")
+    }
+    
+    datos <- temp2
+    
+  } else {
+    
+    datos <- df
+  }
   
   # ------------------------------------------------------------
-  # 0A. Normalizar productos (11 o más → 11)
+  # 0A. Función para normalizar productos de experiencia
   # ------------------------------------------------------------
+  
   normalizar_productos <- function(x) {
-    x_chr <- tolower(str_squish(as.character(x)))
+    
+    x_chr <- as.character(x)
+    x_chr <- stringr::str_squish(x_chr)
+    x_chr <- stringr::str_to_lower(x_chr)
     x_chr <- chartr("áéíóú", "aeiou", x_chr)
     
-    case_when(
+    dplyr::case_when(
       is.na(x_chr) | x_chr == "" ~ NA_real_,
-      str_detect(x_chr, "11\\s*o\\s*mas") ~ 11,
-      str_detect(x_chr, "11\\+") ~ 11,
-      TRUE ~ suppressWarnings(as.numeric(str_extract(x_chr, "[0-9]+")))
+      stringr::str_detect(x_chr, "11\\s*o\\s*mas") ~ 11,
+      stringr::str_detect(x_chr, "11\\+") ~ 11,
+      TRUE ~ suppressWarnings(as.numeric(stringr::str_extract(x_chr, "[0-9]+")))
     )
+  }
+  
+  # ------------------------------------------------------------
+  # 0B. Asegurar clave de materia
+  # ------------------------------------------------------------
+  
+  datos <- datos |>
+    dplyr::mutate(
+      clv_materia = stringr::str_extract(asignatura, "^[0-9]{3,4}")
+    )
+  
+  # ------------------------------------------------------------
+  # 0C. Si los profesores siguen en formato ancho, pasarlos a largo
+  # ------------------------------------------------------------
+  
+  if (!all(c("profesor", "profesor_id") %in% names(datos))) {
+    
+    cols_profesores <- grep("_p[123]$", names(datos), value = TRUE)
+    
+    if (length(cols_profesores) == 0) {
+      stop(
+        "No encuentro columnas de profesores con sufijos `_p1`, `_p2` o `_p3`. ",
+        "Revisa la salida de `temp2()`."
+      )
+    }
+    
+    datos <- datos |>
+      dplyr::mutate(
+        dplyr::across(
+          dplyr::all_of(cols_profesores),
+          ~ dplyr::na_if(stringr::str_squish(as.character(.x)), "")
+        )
+      ) |>
+      tidyr::pivot_longer(
+        cols = dplyr::all_of(cols_profesores),
+        names_to = c(".value", "profesor_id"),
+        names_pattern = "^(.*)_p([123])$"
+      ) |>
+      dplyr::mutate(
+        profesor_id = paste0("p", profesor_id),
+        clv_materia = stringr::str_extract(asignatura, "^[0-9]{3,4}")
+      ) |>
+      dplyr::filter(
+        !is.na(profesor),
+        stringr::str_trim(profesor) != ""
+      )
+  }
+  
+  # ------------------------------------------------------------
+  # 0D. Crear variable auxiliar para productos
+  # ------------------------------------------------------------
+  
+  if ("productos" %in% names(datos) && !"productos_join" %in% names(datos)) {
+    datos <- datos |>
+      dplyr::mutate(
+        productos_join = normalizar_productos(productos)
+      )
   }
   
   # ============================================================
@@ -227,24 +312,23 @@ valores <- function(df, rubrica, catalogo_perfiles) {
   # ============================================================
   
   cat_long <- catalogo_perfiles |>
-    pivot_longer(
-      cols = any_of(c("FMT", "BQ", "MS", "CE", "H", "SS", "AF", "IDT", "I")),
+    janitor::clean_names() |>
+    tidyr::pivot_longer(
+      cols = dplyr::any_of(c("fmt", "bq", "ms", "ce", "h", "ss", "af", "idt", "i")),
       names_to = "area_abbr",
       values_to = "nivel"
     ) |>
-    mutate(
-      nivel = if_else(is.na(nivel) | nivel == "", "INS", nivel),
-      clave = sub("^.", "", Clave),
+    dplyr::mutate(
+      nivel = dplyr::if_else(is.na(nivel) | nivel == "", "INS", nivel),
+      clave = stringr::str_extract(as.character(clave), "[0-9]{3,4}"),
       area_abbr = toupper(area_abbr)
-    )|>
-    select(-Clave)|>
-    relocate(clave, .before = `Asignatura (Nombre Completo)`)
+    )
   
   # ============================================================
   # 3. PROCESAR PERFIL PROFESIONAL DEL PROFESOR
   # ============================================================
   
-  datos <- df |>
+  datos <- datos |>
     mutate(
       perfil_form = replace_na(perfil_form, ""), 
       area1 = str_trim(str_split_fixed(perfil_form, ",", 2)[,1]),
@@ -314,18 +398,26 @@ valores <- function(df, rubrica, catalogo_perfiles) {
   # 5. APLICAR RÚBRICA
   # ============================================================
   
-  mapear <- function(df, rub, variable_rubrica, columna_df, sufijo) {
+  mapear <- function(df, rub, col_df, var_rub, sufijo){
     
     rub_filtrada <- rub |>
-      filter(variable == variable_rubrica) |>
-      select(valor, puntos)
+      dplyr::filter(.data$variable %in% var_rub) |>
+      dplyr::select(valor, puntos) |>
+      dplyr::mutate(
+        valor = stringr::str_squish(as.character(valor)),
+        puntos = as.numeric(puntos)
+      ) |>
+      dplyr::distinct(valor, .keep_all = TRUE)
     
     df |>
-      left_join(
-        rub_filtrada,
-        by = setNames("valor", columna_df)
+      dplyr::mutate(
+        "{col_df}" := stringr::str_squish(as.character(.data[[col_df]]))
       ) |>
-      rename(!!paste0("PTS_", sufijo) := puntos)
+      dplyr::left_join(
+        rub_filtrada,
+        by = stats::setNames("valor", col_df)
+      ) |>
+      dplyr::rename(!!paste0("PTS_", sufijo) := puntos)
   }
   
   mapear_productos <- function(df, rub, sufijo = "PRODUCTOS") {
@@ -347,19 +439,82 @@ valores <- function(df, rubrica, catalogo_perfiles) {
   }
   
   datos <- datos |>
-    mapear(rub_doc, "nombramiento", "nombramiento", "NOMBRAMIENTO") |>
-    mapear(rub_doc, "adscripcion", "adscripcion", "ADSCRIPCION") |>
-    mapear(rub_doc, "estudios", "nivel_estudios", "ESTUDIOS") |>
-    mapear(rub_doc, "papime_resp", "papime_resp", "PAPIME_RESP") |>
-    mapear(rub_doc, "papime_part", "papime_part", "PAPIME_PART") |>
-    mapear(rub_doc, "cursos", "cursos", "CURSOS") |>
-    mapear(rub_ant, "antiguedad", "antiguedad", "ANTIGUEDAD") |>
-    mapear(rub_ant, "antiguedad_otro", "experiencia_similar", "ANTIG_OTRO") |>
-    mapear(rub_exp, "inv_resp", "inv_resp", "INV_RESP") |>
-    mapear(rub_exp, "inv_part", "inv_part", "INV_PART") |>
-    mapear(rub_exp, "cons_resp", "cons_resp", "CONS_RESP") |>
-    mapear(rub_exp, "cons_part", "cons_part", "CONS_PART") |>
-    mapear_productos(rub_exp, "PRODUCTOS")
+    mapear(
+      rub = rub_doc,
+      col_df = "nombramiento",
+      var_rub = c("Nombramiento", "nombramiento"),
+      sufijo = "NOMBRAMIENTO"
+    ) |>
+    mapear(
+      rub = rub_doc,
+      col_df = "adscripcion",
+      var_rub = c("Adscripcion", "Adscripción", "adscripcion"),
+      sufijo = "ADSCRIPCION"
+    ) |>
+    mapear(
+      rub = rub_doc,
+      col_df = "nivel_estudios",
+      var_rub = c("Estudios", "Último nivel de estudios", "nivel_estudios", "estudios"),
+      sufijo = "ESTUDIOS"
+    ) |>
+    mapear(
+      rub = rub_doc,
+      col_df = "papime_resp",
+      var_rub = "papime_resp",
+      sufijo = "PAPIME_RESP"
+    ) |>
+    mapear(
+      rub = rub_doc,
+      col_df = "papime_part",
+      var_rub = "papime_part",
+      sufijo = "PAPIME_PART"
+    ) |>
+    mapear(
+      rub = rub_doc,
+      col_df = "cursos",
+      var_rub = "cursos",
+      sufijo = "CURSOS"
+    ) |>
+    mapear(
+      rub = rub_ant,
+      col_df = "antiguedad",
+      var_rub = "antiguedad",
+      sufijo = "ANTIGUEDAD"
+    ) |>
+    mapear(
+      rub = rub_ant,
+      col_df = "experiencia_similar",
+      var_rub = c("antiguedad_otro", "experiencia_similar"),
+      sufijo = "ANTIG_OTRO"
+    ) |>
+    mapear(
+      rub = rub_exp,
+      col_df = "inv_resp",
+      var_rub = "inv_resp",
+      sufijo = "INV_RESP"
+    ) |>
+    mapear(
+      rub = rub_exp,
+      col_df = "inv_part",
+      var_rub = "inv_part",
+      sufijo = "INV_PART"
+    ) |>
+    mapear(
+      rub = rub_exp,
+      col_df = "cons_resp",
+      var_rub = "cons_resp",
+      sufijo = "CONS_RESP"
+    ) |>
+    mapear(
+      rub = rub_exp,
+      col_df = "cons_part",
+      var_rub = "cons_part",
+      sufijo = "CONS_PART"
+    ) |>
+    mapear_productos(
+      rub = rub_exp,
+      sufijo = "PRODUCTOS"
+    )
   
   # ============================================================
   # 6. PUNTAJE POR PROFESOR
@@ -528,11 +683,107 @@ nomina <- function(x) {
   return(xx)
 }
 
+# ------------------------------------------------------------
+# Formato para las tablas
+# ------------------------------------------------------------
+
+tabla_dt <- function(data, titulo = NULL, page_length = 10) {
+  
+  DT::datatable(
+    data,
+    rownames = FALSE,
+    filter = "top",
+    caption = if (!is.null(titulo)) {
+      htmltools::tags$caption(
+        style = "caption-side: top; text-align: left; font-weight: bold; font-size: 16px; padding-bottom: 8px;",
+        titulo
+      )
+    },
+    options = list(
+      pageLength = page_length,
+      lengthMenu = list(
+        c(10, 25, 50, 100, -1),
+        c("10", "25", "50", "100", "Todos")
+      ),
+      scrollX = TRUE,
+      autoWidth = TRUE,
+      ordering = TRUE,
+      searching = TRUE,
+      language = list(
+        search = "Buscar:",
+        lengthMenu = "Mostrar _MENU_ registros",
+        info = "Mostrando _START_ a _END_ de _TOTAL_ registros",
+        infoEmpty = "Mostrando 0 a 0 de 0 registros",
+        infoFiltered = "(filtrado de _MAX_ registros totales)",
+        zeroRecords = "No se encontraron registros coincidentes",
+        paginate = list(
+          first = "Primero",
+          previous = "Anterior",
+          `next` = "Siguiente",
+          last = "Último"
+        )
+      )
+    )
+  )
+}
+
 # User interface ----------------------------------------------------------
 
 ui <- fluidPage(
   waiter::use_waiter(),
-  titlePanel("Preselección de postulaciones a docencia ENES Mérida"),
+  
+  tags$head(
+    tags$style(HTML("
+      .app-header {
+        width: 100%;
+        margin-bottom: 25px;
+        padding: 10px 0 20px 0;
+        border-bottom: 1px solid #e5e5e5;
+      }
+
+      .header-logos {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 25px;
+        flex-wrap: wrap;
+      }
+
+      .header-logo-475 {
+        max-width: 17%;
+        height: auto;
+      }
+
+      .header-logo-enes {
+        max-width: 17%;
+        height: auto;
+      }
+
+      .app-title {
+        margin-top: 18px;
+        font-size: 26px;
+        font-weight: 600;
+        color: #002b5c;
+        line-height: 1.25;
+      }
+
+      @media (max-width: 768px) {
+        .header-logos {
+          justify-content: center;
+        }
+
+        .header-logo-475,
+        .header-logo-enes {
+          max-width: 90%;
+        }
+
+        .app-title {
+          text-align: center;
+          font-size: 22px;
+        }
+      }
+    "))
+  ),
   
   sidebarLayout(
     sidebarPanel(
@@ -540,44 +791,84 @@ ui <- fluidPage(
                 fileInput("file", "Cargar formulario", accept = ".csv"),
                 actionButton("tidy", "Ordenar solicitudes")
       ),
-      wellPanel(p(strong("2. Aplicación de rúbrica")),
-                fileInput("file2", label = "Cargar rúbrica", accept = ".xlsx"),
-                fileInput("file_cat", label = "Cargar catálogo", accept = ".xlsx"),
-                actionButton("rubrica", "Aplicar rúbrica"),
-                actionButton("total", "Preseleccionar")
+      wellPanel(
+        p(strong("2. Aplicación de rúbrica")),
+        fileInput("file2", label = "Cargar rúbrica", accept = ".xlsx"),
+        fileInput("file_cat", label = "Cargar catálogo", accept = ".xlsx"),
+        actionButton("rubrica", "Aplicar rúbrica"),
+        actionButton("total", "Preseleccionar")
       ),
-      wellPanel(p(strong("3. Datos para nómina")),
-                fileInput("file3", label = "Cargar validaciones", accept = ".csv"),
-                actionButton("adjudicar", "Adjudicados"),
-                actionButton("nomina", "Datos para nómina")
+      wellPanel(
+        p(strong("3. Datos para nómina")),
+        fileInput("file3", label = "Cargar validaciones", accept = ".csv"),
+        actionButton("adjudicar", "Adjudicados"),
+        actionButton("nomina", "Datos para nómina")
       ),
-      wellPanel(p(strong("4. Asignaturas desiertas")),
-                fileInput("file4", label = "Cargar catálogo de la licenciatura", accept = ".xlsx"),
-                actionButton("desierto", "Identificar desiertas")
-      ),
+      wellPanel(
+        p(strong("4. Asignaturas desiertas")),
+        fileInput("file4", label = "Cargar catálogo de la licenciatura", accept = ".xlsx"),
+        actionButton("desierto", "Identificar desiertas")
+      )
     ),
+    
     mainPanel(
+      
+      div(
+        class = "app-header",
+        div(
+          class = "header-logos",
+          tags$img(
+            src = "475_fondo_blanco.jpeg",
+            class = "header-logo-475",
+            alt = "475 aniversario Universidad de México"
+          ),
+          tags$img(
+            src = "ENES_Merida.jpg.jpeg",
+            class = "header-logo-enes",
+            alt = "UNAM ENES Mérida"
+          )
+        ),
+        div(
+          class = "app-title",
+          "Preselección de postulaciones a docencia ENES Mérida"
+        )
+      ),
+      
       tabsetPanel(
-        tabPanel("Info", 
-                 includeMarkdown("intro.md")),
-        tabPanel("Postulaciones ordenadas", 
-                 gt_output("tabla1"),
-                 downloadButton("descarga0",label = "Descarga")),
-        tabPanel("Postulaciones valoradas en detalle",
-                 gt_output("tabla2"),
-                 downloadButton("descarga1",label = "Descarga")),
-        tabPanel("Preselecciones por validar",
-                 gt_output("tabla3"),
-                 downloadButton("descarga2", label = "Descarga")),
-        tabPanel("Adjudicados",
-                 gt_output("tabla4"),
-                 downloadButton("descarga3", label = "Descarga")),
-        tabPanel("Nómina",
-                 gt_output("tabla5"),
-                 downloadButton("descarga4", label = "Descarga")),
-        tabPanel("Desiertas",
-                 gt_output("tabla6"),
-                 downloadButton("descarga5", label = "Descarga"))
+        tabPanel(
+          "Info", 
+          includeMarkdown("intro.md")
+        ),
+        tabPanel(
+          "Postulaciones ordenadas", 
+          DTOutput("tabla1"),
+          downloadButton("descarga0", label = "Descarga")
+        ),
+        tabPanel(
+          "Postulaciones valoradas en detalle",
+          DTOutput("tabla2"),
+          downloadButton("descarga1", label = "Descarga")
+        ),
+        tabPanel(
+          "Preselecciones por validar",
+          DTOutput("tabla3"),
+          downloadButton("descarga2", label = "Descarga")
+        ),
+        tabPanel(
+          "Adjudicados",
+          DTOutput("tabla4"),
+          downloadButton("descarga3", label = "Descarga")
+        ),
+        tabPanel(
+          "Nómina",
+          DTOutput("tabla5"),
+          downloadButton("descarga4", label = "Descarga")
+        ),
+        tabPanel(
+          "Desiertas",
+          DTOutput("tabla6"),
+          downloadButton("descarga5", label = "Descarga")
+        )
       )
     )
   )
@@ -710,10 +1001,12 @@ server <- function(input, output, session) {
         } else {
           max(total, na.rm = TRUE)
         },
-        adjudicacion = dplyr::if_else(
-          !is.na(total) & total == puntaje_max,
-          "VALIDAR POR CA",
-          "CONDICIONADA"
+        n_max = sum(total == puntaje_max, na.rm = TRUE),
+        adjudicacion = dplyr::case_when(
+          is.na(total) ~ "REVISAR",
+          total == puntaje_max & n_max == 1 ~ "VALIDAR POR CA",
+          total == puntaje_max & n_max > 1 ~ "EMPATE - VALIDAR POR CA",
+          TRUE ~ "CONDICIONADA"
         ),
         diferencia = dplyr::if_else(
           adjudicacion == "VALIDAR POR CA",
@@ -725,7 +1018,7 @@ server <- function(input, output, session) {
       dplyr::select(-puntaje_max)
   })
   
-  # 7. Datos nómina (igual que antes)
+  # 7. <- nómina (igual que antes)
   temp6 <- reactive({
     infile3 <- input$file3
     import(infile3$datapath, 
@@ -787,32 +1080,83 @@ server <- function(input, output, session) {
     nomina(temp7())
   })
   
-  # 8. Desiertas (igual que antes)
+  # 8. Desiertas -------------------------------------------------------------
+  
   temp9 <- reactive({
+    
+    req(input$file4)
+    
     infile4 <- input$file4
-    import(infile4$datapath)
+    
+    import(infile4$datapath) |>
+      janitor::clean_names() |>
+      mutate(
+        semestre_grupo = stringr::str_squish(as.character(semestre_grupo)),
+        asignatura = stringr::str_squish(as.character(asignatura))
+      ) |>
+      distinct(semestre_grupo, asignatura, .keep_all = TRUE)
   })
   
   temp10 <- eventReactive(input$desierto, {
-    anti_join(temp9(), temp7())
+    
+    req(temp9())
+    req(temp7())
+    
+    catalogo_licenciatura <- temp9() |>
+      mutate(
+        semestre_grupo = stringr::str_squish(as.character(semestre_grupo)),
+        asignatura = stringr::str_squish(as.character(asignatura))
+      )
+    
+    asignaturas_adjudicadas <- temp7() |>
+      mutate(
+        semestre_grupo = stringr::str_squish(as.character(semestre_grupo)),
+        asignatura = stringr::str_squish(as.character(asignatura))
+      ) |>
+      distinct(semestre_grupo, asignatura)
+    
+    anti_join(
+      catalogo_licenciatura,
+      asignaturas_adjudicadas,
+      by = c("semestre_grupo", "asignatura")
+    )
   })
   
-  #----------------- outputs (puedes mantener renderTable o pasar a gt) -------------
-  output$tabla1 <- renderTable({
-    temp2() |>
-      mutate(
-        marca = format(marca, "%d/%m/%Y %H:%M:%S")
-      )
-  })
-  output$tabla2 <- renderTable({ temp4() })
-  output$tabla3 <- renderTable({ temp5() })
-  output$tabla4 <- renderTable({ temp7() })
-  output$tabla5 <- renderTable({ temp8() })
-  output$tabla6 <- renderTable({ temp10() })
+  #----------------- outputs DT ----------------------------------------------------
+  
+  output$tabla1 <- DT::renderDT({
+    req(temp2())
+    tabla_dt(temp2(), "Postulaciones ordenadas", page_length = 10)
+  }, server = TRUE)
+  
+  output$tabla2 <- DT::renderDT({
+    req(temp4())
+    tabla_dt(temp4(), "Postulaciones valoradas en detalle", page_length = 10)
+  }, server = TRUE)
+  
+  output$tabla3 <- DT::renderDT({
+    req(temp5())
+    tabla_dt(temp5(), "Preselecciones por validar", page_length = 10)
+  }, server = TRUE)
+  
+  output$tabla4 <- DT::renderDT({
+    req(temp7())
+    tabla_dt(temp7(), "Adjudicados", page_length = 10)
+  }, server = TRUE)
+  
+  output$tabla5 <- DT::renderDT({
+    req(temp8())
+    tabla_dt(temp8(), "Datos para nómina", page_length = 10)
+  }, server = TRUE)
+  
+  output$tabla6 <- DT::renderDT({
+    req(temp10())
+    tabla_dt(temp10(), "Asignaturas desiertas", page_length = 10)
+  }, server = TRUE)
   
   # descargas (ajustadas a los nuevos objetos)
   output$descarga0 <- downloadHandler(
-    filename = "temp2.csv",
+    filename = "convocatorias.csv",
     content = function(file) {
       vroom::vroom_write(temp2(), file , delim = ",", bom = TRUE)
     }
