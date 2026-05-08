@@ -2,10 +2,8 @@
 
 # carga un formulario, rubrica y catálogo
 
-#Aplica las líneas de la función valores para detectar errores e incosistencias con los archivos
+library(readr)
+df_raw <- read_csv("data/respuestas_LCA.csv")
+rubrica <- read_excel("data/Rubricas_2027-1.xlsx", sheet = "compilada")
+catalogo_perfiles <- read_excel("data/CATALOGO_LCA.xlsx", sheet = "perfiles")
 
-temp2 <- 
-
-rubrica <- 
-
-catalogo_perfiles <- 
