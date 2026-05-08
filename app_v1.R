@@ -2,7 +2,7 @@
 library(shiny)
 library(vroom)
 library(waiter)
-library(gt)
+library(DT)
 library(dplyr)
 library(tidyr)
 library(shinyWidgets)
@@ -27,19 +27,6 @@ valores <- function(temp2, rubrica, catalogo_perfiles) {
   # ============================================================
   
   datos <- temp2 |>
-    # rename(
-    #   antiguedad      = `Antigüedad impartiendo esta asignatura en esta licenciatura`,
-    #   antiguedad_otro = `Experiencia impartiendo asignaturas similares en otros programas de licenciatura`,
-    #   papime_resp     = `Responsable de proyectos PAPIME en la enseñanza de esta asignatura o asignatura afín`,
-    #   papime_part     = `Participación en proyectos PAPIME en la enseñanza de esta asignatura o asignatura afín`,
-    #   cursos          = `Número de Cursos de Actualización Docente con duración superior a 20 horas en los últimos 5 años`,
-    #   inv_resp        = `Proyectos de Investigación con financiamiento en el campo de conocimiento de la asignatura, de los que ha sido Responsable Técnico o Coordinador:`,
-    #   inv_part        = `Proyectos de Investigación con financiamiento en el campo de conocimiento de la asignatura, de los que ha sido Participante:`,
-    #   cons_resp       = `Proyectos de Servicio o Consultoría en el campo de conocimiento de la asignatura, de los que ha sido Responsable Técnico o Coordinador:`,
-    #   cons_part       = `Proyectos de Servicio o Consultoría en el campo de conocimiento de la asignatura, de los que ha sido Participante:`,
-    #   productos       = `Productos académicos, técnicos o profesionales relevantes para la asignatura`,
-    #   perfil_form     = `Perfil de formación profesional`
-    # ) |>
     mutate(
       clv_materia = str_extract(asignatura, "^[0-9]{3,4}")
     )
@@ -185,15 +172,6 @@ valores <- function(temp2, rubrica, catalogo_perfiles) {
   # ============================================================
   # 5. APLICAR RÚBRICA A TODAS LAS VARIABLES
   # ============================================================
-  
-  # mapear <- function(df, rub, var, sufijo) {
-  #   df |>
-  #     left_join(
-  #       rub |> filter(variable == var) |> select(valor, puntos),
-  #       by = c({{var}} := "valor")
-  #     ) |>
-  #     rename(!!paste0("PTS_", sufijo) := puntos)
-  # }
   
   mapear <- function(df, rub, col_df, var_rub, sufijo){
     rub_filtrada <- rub |>
@@ -376,53 +354,6 @@ valores <- function(temp2, rubrica, catalogo_perfiles) {
   )
 }
 
-# 
-# nomina <- function(x){
-#   adjudicados <- x
-#   yy <- tibble(
-#     "Semestre/Grupo" = str_remove(adjudicados$semestre_grupo, "LCA, semestre "),
-#     "Asignatura" = adjudicados$asignatura,
-#     "Profesor(a)" = adjudicados$profesor,
-#     "estudios" = adjudicados$estudios,
-#     "Nombramiento" = factor(adjudicados$nombramiento,
-#                             levels = c("UNAM - Profesor",
-#                                        "Profesor de Asignatura",
-#                                        "UNAM -  Investigador",
-#                                        "Profesor Honorífico",
-#                                        "UNAM - Técnico Académico"
-#                             ),
-#                             labels = c("Profesor Tiempo Completo",
-#                                        "Profesor de Asignatura",
-#                                        "Investigador Tiempo Completo",
-#                                        "Profesor Honorífico",
-#                                        "Técnico Académico")),
-#     "RFC" = adjudicados$rfc,
-#     "UNAM" = as.character(adjudicados$num_unam),
-#     "correo1" = adjudicados$correo_unam,
-#     "correo2" = adjudicados$correo_pers,
-#     "HT" = as.numeric(adjudicados$horas_t),
-#     "HP" = as.numeric(adjudicados$horas_p)
-#   )
-#   
-#   xx <- yy |> 
-#     group_by(`Semestre/Grupo`, Asignatura, `Profesor(a)`) |> 
-#     mutate("Carga Horaria" = sum(HT, HP),
-#            "Horas Pagadas"= if_else(Nombramiento == "Profesor de Asignatura", 
-#                                     true = sum(HT, HP),
-#                                     false = 0),
-#            "correo" = if_else(str_detect(correo1, pattern = "unam.mx"),
-#                               correo1,
-#                               correo2)
-#     ) |> 
-#     relocate(correo, .after = UNAM) |> 
-#     relocate(`Carga Horaria`, .before = HT) |> 
-#     select(-c(correo1, correo2)) |> 
-#     pivot_longer(cols = estudios:correo, names_to = "info", values_to = "Datos") |> 
-#     select(-c(info)) |> 
-#     relocate(Datos, .after = `Profesor(a)`)
-#   return(xx)
-# 
-# }
 
 nomina <- function(x) {
   
@@ -534,56 +465,193 @@ nomina <- function(x) {
   return(xx)
 }
 
+# ------------------------------------------------------------
+# Formato para las tablas
+# ------------------------------------------------------------
+
+tabla_dt <- function(data, titulo = NULL, page_length = 10) {
+  
+  DT::datatable(
+    data,
+    rownames = FALSE,
+    filter = "top",
+    caption = if (!is.null(titulo)) {
+      htmltools::tags$caption(
+        style = "caption-side: top; text-align: left; font-weight: bold; font-size: 16px; padding-bottom: 8px;",
+        titulo
+      )
+    },
+    options = list(
+      pageLength = page_length,
+      lengthMenu = list(
+        c(10, 25, 50, 100, -1),
+        c("10", "25", "50", "100", "Todos")
+      ),
+      scrollX = TRUE,
+      autoWidth = TRUE,
+      ordering = TRUE,
+      searching = TRUE,
+      language = list(
+        search = "Buscar:",
+        lengthMenu = "Mostrar _MENU_ registros",
+        info = "Mostrando _START_ a _END_ de _TOTAL_ registros",
+        infoEmpty = "Mostrando 0 a 0 de 0 registros",
+        infoFiltered = "(filtrado de _MAX_ registros totales)",
+        zeroRecords = "No se encontraron registros coincidentes",
+        paginate = list(
+          first = "Primero",
+          previous = "Anterior",
+          `next` = "Siguiente",
+          last = "Último"
+        )
+      )
+    )
+  )
+}
+
 # User interface ----------------------------------------------------------
 
 ui <- fluidPage(
   waiter::use_waiter(),
-  titlePanel("Preselección de postulaciones a docencia ENES Mérida"),
+  
+  tags$head(
+    tags$style(HTML("
+      .app-header {
+        width: 100%;
+        margin-bottom: 25px;
+        padding: 10px 0 20px 0;
+        border-bottom: 1px solid #e5e5e5;
+      }
+
+      .header-logos {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 25px;
+        flex-wrap: wrap;
+      }
+
+      .header-logo-475 {
+        max-width: 17%;
+        height: auto;
+      }
+
+      .header-logo-enes {
+        max-width: 17%;
+        height: auto;
+      }
+
+      .app-title {
+        margin-top: 18px;
+        font-size: 26px;
+        font-weight: 600;
+        color: #002b5c;
+        line-height: 1.25;
+      }
+
+      @media (max-width: 768px) {
+        .header-logos {
+          justify-content: center;
+        }
+
+        .header-logo-475,
+        .header-logo-enes {
+          max-width: 90%;
+        }
+
+        .app-title {
+          text-align: center;
+          font-size: 22px;
+        }
+      }
+    "))
+  ),
   
   sidebarLayout(
     sidebarPanel(
-      wellPanel(p(strong("1. Preparación de datos")),
-                fileInput("file", "Cargar formulario", accept = ".xlsx", multiple = TRUE),
-                actionButton("tidy", "Ordenar solicitudes")
+      wellPanel(
+        p(strong("1. Preparación de datos")),
+        fileInput("file", "Cargar formulario", accept = ".xlsx", multiple = TRUE),
+        actionButton("tidy", "Ordenar solicitudes")
       ),
-      wellPanel(p(strong("2. Aplicación de rúbrica")),
-                fileInput("file2", label = "Cargar rúbrica", accept = ".xlsx"),
-                fileInput("file_cat", label = "Cargar catálogo", accept = ".xlsx"),
-                actionButton("rubrica", "Aplicar rúbrica"),
-                actionButton("total", "Preseleccionar")
+      wellPanel(
+        p(strong("2. Aplicación de rúbrica")),
+        fileInput("file2", label = "Cargar rúbrica", accept = ".xlsx"),
+        fileInput("file_cat", label = "Cargar catálogo", accept = ".xlsx"),
+        actionButton("rubrica", "Aplicar rúbrica"),
+        actionButton("total", "Preseleccionar")
       ),
-      wellPanel(p(strong("3. Datos para nómina")),
-                fileInput("file3", label = "Cargar validaciones", accept = ".csv"),
-                actionButton("adjudicar", "Adjudicados"),
-                actionButton("nomina", "Datos para nómina")
+      wellPanel(
+        p(strong("3. Datos para nómina")),
+        fileInput("file3", label = "Cargar validaciones", accept = ".csv"),
+        actionButton("adjudicar", "Adjudicados"),
+        actionButton("nomina", "Datos para nómina")
       ),
-      wellPanel(p(strong("4. Asignaturas desiertas")),
-                fileInput("file4", label = "Cargar catálogo de la licenciatura", accept = ".xlsx"),
-                actionButton("desierto", "Identificar desiertas")
-      ),
+      wellPanel(
+        p(strong("4. Asignaturas desiertas")),
+        fileInput("file4", label = "Cargar catálogo de la licenciatura", accept = ".xlsx"),
+        actionButton("desierto", "Identificar desiertas")
+      )
     ),
+    
     mainPanel(
+      
+      div(
+        class = "app-header",
+        div(
+          class = "header-logos",
+          tags$img(
+            src = "475_fondo_blanco.jpeg",
+            class = "header-logo-475",
+            alt = "475 aniversario Universidad de México"
+          ),
+          tags$img(
+            src = "ENES_Merida.jpg.jpeg",
+            class = "header-logo-enes",
+            alt = "UNAM ENES Mérida"
+          )
+        ),
+        div(
+          class = "app-title",
+          "Preselección de postulaciones a docencia ENES Mérida"
+        )
+      ),
+      
       tabsetPanel(
-        tabPanel("Info", 
-                 includeMarkdown("intro.md")),
-        tabPanel("Postulaciones ordenadas", 
-                 gt_output("tabla1"),
-                 downloadButton("descarga0",label = "Descarga")),
-        tabPanel("Postulaciones valoradas en detalle",
-                 gt_output("tabla2"),
-                 downloadButton("descarga1",label = "Descarga")),
-        tabPanel("Preselecciones por validar",
-                 gt_output("tabla3"),
-                 downloadButton("descarga2", label = "Descarga")),
-        tabPanel("Adjudicados",
-                 gt_output("tabla4"),
-                 downloadButton("descarga3", label = "Descarga")),
-        tabPanel("Nómina",
-                 gt_output("tabla5"),
-                 downloadButton("descarga4", label = "Descarga")),
-        tabPanel("Desiertas",
-                 gt_output("tabla6"),
-                 downloadButton("descarga5", label = "Descarga"))
+        tabPanel(
+          "Info", 
+          includeMarkdown("intro.md")
+        ),
+        tabPanel(
+          "Postulaciones ordenadas", 
+          DTOutput("tabla1"),
+          downloadButton("descarga0", label = "Descarga")
+        ),
+        tabPanel(
+          "Postulaciones valoradas en detalle",
+          DTOutput("tabla2"),
+          downloadButton("descarga1", label = "Descarga")
+        ),
+        tabPanel(
+          "Preselecciones por validar",
+          DTOutput("tabla3"),
+          downloadButton("descarga2", label = "Descarga")
+        ),
+        tabPanel(
+          "Adjudicados",
+          DTOutput("tabla4"),
+          downloadButton("descarga3", label = "Descarga")
+        ),
+        tabPanel(
+          "Nómina",
+          DTOutput("tabla5"),
+          downloadButton("descarga4", label = "Descarga")
+        ),
+        tabPanel(
+          "Desiertas",
+          DTOutput("tabla6"),
+          downloadButton("descarga5", label = "Descarga")
+        )
       )
     )
   )
@@ -896,12 +964,45 @@ server <- function(input, output, session) {
   })
   
   #----------------- outputs (puedes mantener renderTable o pasar a gt) -------------
-  output$tabla1 <- renderTable({ temp2() })
-  output$tabla2 <- renderTable({ temp4() })
-  output$tabla3 <- renderTable({ temp5() })
-  output$tabla4 <- renderTable({ temp7() })
-  output$tabla5 <- renderTable({ temp8() })
-  output$tabla6 <- renderTable({ temp10() })
+  # output$tabla1 <- renderTable({ temp2() })
+  # output$tabla2 <- renderTable({ temp4() })
+  # output$tabla3 <- renderTable({ temp5() })
+  # output$tabla4 <- renderTable({ temp7() })
+  # output$tabla5 <- renderTable({ temp8() })
+  # output$tabla6 <- renderTable({ temp10() })
+  #----------------- outputs GT ----------------------------------------------------
+  
+  #----------------- outputs DT ----------------------------------------------------
+  
+  output$tabla1 <- DT::renderDT({
+    req(temp2())
+    tabla_dt(temp2(), "Postulaciones ordenadas", page_length = 10)
+  }, server = TRUE)
+  
+  output$tabla2 <- DT::renderDT({
+    req(temp4())
+    tabla_dt(temp4(), "Postulaciones valoradas en detalle", page_length = 10)
+  }, server = TRUE)
+  
+  output$tabla3 <- DT::renderDT({
+    req(temp5())
+    tabla_dt(temp5(), "Preselecciones por validar", page_length = 10)
+  }, server = TRUE)
+  
+  output$tabla4 <- DT::renderDT({
+    req(temp7())
+    tabla_dt(temp7(), "Adjudicados", page_length = 10)
+  }, server = TRUE)
+  
+  output$tabla5 <- DT::renderDT({
+    req(temp8())
+    tabla_dt(temp8(), "Datos para nómina", page_length = 10)
+  }, server = TRUE)
+  
+  output$tabla6 <- DT::renderDT({
+    req(temp10())
+    tabla_dt(temp10(), "Asignaturas desiertas", page_length = 10)
+  }, server = TRUE)
   
   # descargas (ajustadas a los nuevos objetos)
   output$descarga0 <- downloadHandler(
