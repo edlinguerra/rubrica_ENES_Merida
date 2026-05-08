@@ -16,7 +16,7 @@ library(janitor)
 # funciones preliminares --------------------------------------------------
 
 leer_formulario <- function(path_csv) {
-
+  
   # ============================================================
   # 1. LEER CSV (todo como texto excepto marca temporal)
   # ============================================================
@@ -193,23 +193,108 @@ leer_formulario <- function(path_csv) {
   return(df)
 }
 
-valores <- function(df, rubrica, catalogo_perfiles) {
-
-  datos <- df
+valores <- function(temp2 = NULL, df = NULL, rubrica, catalogo_perfiles) {
+  
+  library(dplyr)
+  library(tidyr)
+  library(stringr)
+  library(purrr)
+  library(janitor)
+  
+  # ============================================================
+  # 0. NORMALIZAR ENTRADA
+  # ============================================================
+  # Esta versión acepta dos formas de entrada:
+  # 1) temp2: salida del server, con profesores en columnas *_p1, *_p2, *_p3
+  # 2) df: datos ya pivoteados a formato largo por profesor
+  
+  if (is.null(df)) {
+    
+    if (is.null(temp2)) {
+      stop("Debes proporcionar `temp2` o `df` a la función valores().")
+    }
+    
+    datos <- temp2
+    
+  } else {
+    
+    datos <- df
+  }
   
   # ------------------------------------------------------------
-  # 0A. Normalizar productos (11 o más → 11)
+  # 0A. Función para normalizar productos de experiencia
   # ------------------------------------------------------------
+  
   normalizar_productos <- function(x) {
-    x_chr <- tolower(str_squish(as.character(x)))
+    
+    x_chr <- as.character(x)
+    x_chr <- stringr::str_squish(x_chr)
+    x_chr <- stringr::str_to_lower(x_chr)
     x_chr <- chartr("áéíóú", "aeiou", x_chr)
     
-    case_when(
+    dplyr::case_when(
       is.na(x_chr) | x_chr == "" ~ NA_real_,
-      str_detect(x_chr, "11\\s*o\\s*mas") ~ 11,
-      str_detect(x_chr, "11\\+") ~ 11,
-      TRUE ~ suppressWarnings(as.numeric(str_extract(x_chr, "[0-9]+")))
+      stringr::str_detect(x_chr, "11\\s*o\\s*mas") ~ 11,
+      stringr::str_detect(x_chr, "11\\+") ~ 11,
+      TRUE ~ suppressWarnings(as.numeric(stringr::str_extract(x_chr, "[0-9]+")))
     )
+  }
+  
+  # ------------------------------------------------------------
+  # 0B. Asegurar clave de materia
+  # ------------------------------------------------------------
+  
+  datos <- datos |>
+    dplyr::mutate(
+      clv_materia = stringr::str_extract(asignatura, "^[0-9]{3,4}")
+    )
+  
+  # ------------------------------------------------------------
+  # 0C. Si los profesores siguen en formato ancho, pasarlos a largo
+  # ------------------------------------------------------------
+  
+  if (!all(c("profesor", "profesor_id") %in% names(datos))) {
+    
+    cols_profesores <- grep("_p[123]$", names(datos), value = TRUE)
+    
+    if (length(cols_profesores) == 0) {
+      stop(
+        "No encuentro columnas de profesores con sufijos `_p1`, `_p2` o `_p3`. ",
+        "Revisa la salida de `temp2()`."
+      )
+    }
+    
+    datos <- datos |>
+      dplyr::mutate(
+        dplyr::across(
+          dplyr::all_of(cols_profesores),
+          ~ dplyr::na_if(stringr::str_squish(as.character(.x)), "")
+        )
+      ) |>
+      tidyr::pivot_longer(
+        cols = dplyr::all_of(cols_profesores),
+        names_to = c(".value", "profesor_id"),
+        names_pattern = "^(.*)_p([123])$"
+      ) |>
+      dplyr::mutate(
+        profesor_id = paste0("p", profesor_id),
+        clv_materia = stringr::str_extract(asignatura, "^[0-9]{3,4}")
+      ) |>
+      dplyr::filter(
+        !is.na(profesor),
+        stringr::str_trim(profesor) != ""
+      )
+  }
+  
+  # ------------------------------------------------------------
+  # 0D. Crear variable auxiliar para productos
+  # ------------------------------------------------------------
+  
+  if ("productos" %in% names(datos) && !"productos_join" %in% names(datos)) {
+    datos <- datos |>
+      dplyr::mutate(
+        productos_join = normalizar_productos(productos)
+      )
   }
   
   # ============================================================
@@ -226,24 +311,23 @@ valores <- function(df, rubrica, catalogo_perfiles) {
   # ============================================================
   
   cat_long <- catalogo_perfiles |>
-    pivot_longer(
-      cols = any_of(c("FMT", "BQ", "MS", "CE", "H", "SS", "AF", "IDT", "I")),
+    janitor::clean_names() |>
+    tidyr::pivot_longer(
+      cols = dplyr::any_of(c("fmt", "bq", "ms", "ce", "h", "ss", "af", "idt", "i")),
       names_to = "area_abbr",
       values_to = "nivel"
     ) |>
-    mutate(
-      nivel = if_else(is.na(nivel) | nivel == "", "INS", nivel),
-      clave = sub("^.", "", Clave),
+    dplyr::mutate(
+      nivel = dplyr::if_else(is.na(nivel) | nivel == "", "INS", nivel),
+      clave = stringr::str_extract(as.character(clave), "[0-9]{3,4}"),
       area_abbr = toupper(area_abbr)
-    )|>
-    select(-Clave)|>
-    relocate(clave, .before = `Asignatura (Nombre Completo)`)
+    )
   
   # ============================================================
   # 3. PROCESAR PERFIL PROFESIONAL DEL PROFESOR
   # ============================================================
   
-  datos <- df |>
+  datos <- datos |>
     mutate(
       perfil_form = replace_na(perfil_form, ""), 
       area1 = str_trim(str_split_fixed(perfil_form, ",", 2)[,1]),
@@ -313,18 +397,26 @@ valores <- function(df, rubrica, catalogo_perfiles) {
   # 5. APLICAR RÚBRICA
   # ============================================================
   
-  mapear <- function(df, rub, variable_rubrica, columna_df, sufijo) {
+  mapear <- function(df, rub, col_df, var_rub, sufijo){
     
     rub_filtrada <- rub |>
-      filter(variable == variable_rubrica) |>
-      select(valor, puntos)
+      dplyr::filter(.data$variable %in% var_rub) |>
+      dplyr::select(valor, puntos) |>
+      dplyr::mutate(
+        valor = stringr::str_squish(as.character(valor)),
+        puntos = as.numeric(puntos)
+      ) |>
+      dplyr::distinct(valor, .keep_all = TRUE)
     
     df |>
-      left_join(
-        rub_filtrada,
-        by = setNames("valor", columna_df)
+      dplyr::mutate(
+        "{col_df}" := stringr::str_squish(as.character(.data[[col_df]]))
       ) |>
-      rename(!!paste0("PTS_", sufijo) := puntos)
+      dplyr::left_join(
+        rub_filtrada,
+        by = stats::setNames("valor", col_df)
+      ) |>
+      dplyr::rename(!!paste0("PTS_", sufijo) := puntos)
   }
   
   mapear_productos <- function(df, rub, sufijo = "PRODUCTOS") {
@@ -346,19 +438,82 @@ valores <- function(df, rubrica, catalogo_perfiles) {
   }
   
   datos <- datos |>
-    mapear(rub_doc, "nombramiento", "nombramiento", "NOMBRAMIENTO") |>
-    mapear(rub_doc, "adscripcion", "adscripcion", "ADSCRIPCION") |>
-    mapear(rub_doc, "estudios", "nivel_estudios", "ESTUDIOS") |>
-    mapear(rub_doc, "papime_resp", "papime_resp", "PAPIME_RESP") |>
-    mapear(rub_doc, "papime_part", "papime_part", "PAPIME_PART") |>
-    mapear(rub_doc, "cursos", "cursos", "CURSOS") |>
-    mapear(rub_ant, "antiguedad", "antiguedad", "ANTIGUEDAD") |>
-    mapear(rub_ant, "antiguedad_otro", "experiencia_similar", "ANTIG_OTRO") |>
-    mapear(rub_exp, "inv_resp", "inv_resp", "INV_RESP") |>
-    mapear(rub_exp, "inv_part", "inv_part", "INV_PART") |>
-    mapear(rub_exp, "cons_resp", "cons_resp", "CONS_RESP") |>
-    mapear(rub_exp, "cons_part", "cons_part", "CONS_PART") |>
-    mapear_productos(rub_exp, "PRODUCTOS")
+    mapear(
+      rub = rub_doc,
+      col_df = "nombramiento",
+      var_rub = c("Nombramiento", "nombramiento"),
+      sufijo = "NOMBRAMIENTO"
+    ) |>
+    mapear(
+      rub = rub_doc,
+      col_df = "adscripcion",
+      var_rub = c("Adscripcion", "Adscripción", "adscripcion"),
+      sufijo = "ADSCRIPCION"
+    ) |>
+    mapear(
+      rub = rub_doc,
+      col_df = "nivel_estudios",
+      var_rub = c("Estudios", "Último nivel de estudios", "nivel_estudios", "estudios"),
+      sufijo = "ESTUDIOS"
+    ) |>
+    mapear(
+      rub = rub_doc,
+      col_df = "papime_resp",
+      var_rub = "papime_resp",
+      sufijo = "PAPIME_RESP"
+    ) |>
+    mapear(
+      rub = rub_doc,
+      col_df = "papime_part",
+      var_rub = "papime_part",
+      sufijo = "PAPIME_PART"
+    ) |>
+    mapear(
+      rub = rub_doc,
+      col_df = "cursos",
+      var_rub = "cursos",
+      sufijo = "CURSOS"
+    ) |>
+    mapear(
+      rub = rub_ant,
+      col_df = "antiguedad",
+      var_rub = "antiguedad",
+      sufijo = "ANTIGUEDAD"
+    ) |>
+    mapear(
+      rub = rub_ant,
+      col_df = "experiencia_similar",
+      var_rub = c("antiguedad_otro", "experiencia_similar"),
+      sufijo = "ANTIG_OTRO"
+    ) |>
+    mapear(
+      rub = rub_exp,
+      col_df = "inv_resp",
+      var_rub = "inv_resp",
+      sufijo = "INV_RESP"
+    ) |>
+    mapear(
+      rub = rub_exp,
+      col_df = "inv_part",
+      var_rub = "inv_part",
+      sufijo = "INV_PART"
+    ) |>
+    mapear(
+      rub = rub_exp,
+      col_df = "cons_resp",
+      var_rub = "cons_resp",
+      sufijo = "CONS_RESP"
+    ) |>
+    mapear(
+      rub = rub_exp,
+      col_df = "cons_part",
+      var_rub = "cons_part",
+      sufijo = "CONS_PART"
+    ) |>
+    mapear_productos(
+      rub = rub_exp,
+      sufijo = "PRODUCTOS"
+    )
   
   # ============================================================
   # 6. PUNTAJE POR PROFESOR
@@ -956,7 +1111,7 @@ server <- function(input, output, session) {
       dplyr::select(-puntaje_max)
   })
   
-  # 7. Datos nómina (igual que antes)
+  # 7. <- nómina (igual que antes)
   temp6 <- reactive({
     infile3 <- input$file3
     import(infile3$datapath, 
@@ -1094,7 +1249,7 @@ server <- function(input, output, session) {
   
   # descargas (ajustadas a los nuevos objetos)
   output$descarga0 <- downloadHandler(
-    filename = "temp2.csv",
+    filename = "convocatorias.csv",
     content = function(file) {
       vroom::vroom_write(temp2(), file , delim = ",", bom = TRUE)
     }
