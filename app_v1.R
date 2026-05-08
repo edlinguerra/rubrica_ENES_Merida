@@ -876,10 +876,12 @@ server <- function(input, output, session) {
         } else {
           max(total, na.rm = TRUE)
         },
-        adjudicacion = dplyr::if_else(
-          !is.na(total) & total == puntaje_max,
-          "VALIDAR POR CA",
-          "CONDICIONADA"
+        n_max = sum(total == puntaje_max, na.rm = TRUE),
+        adjudicacion = dplyr::case_when(
+          is.na(total) ~ "REVISAR",
+          total == puntaje_max & n_max == 1 ~ "VALIDAR POR CA",
+          total == puntaje_max & n_max > 1 ~ "EMPATE - VALIDAR POR CA",
+          TRUE ~ "CONDICIONADA"
         ),
         diferencia = dplyr::if_else(
           adjudicacion == "VALIDAR POR CA",
@@ -953,24 +955,47 @@ server <- function(input, output, session) {
     nomina(temp7())
   })
   
-  # 8. Desiertas (igual que antes)
+  # 8. Desiertas -------------------------------------------------------------
+  
   temp9 <- reactive({
+    
+    req(input$file4)
+    
     infile4 <- input$file4
-    import(infile4$datapath)
+    
+    import(infile4$datapath) |>
+      janitor::clean_names() |>
+      mutate(
+        semestre_grupo = stringr::str_squish(as.character(semestre_grupo)),
+        asignatura = stringr::str_squish(as.character(asignatura))
+      ) |>
+      distinct(semestre_grupo, asignatura, .keep_all = TRUE)
   })
   
   temp10 <- eventReactive(input$desierto, {
-    anti_join(temp9(), temp7())
+    
+    req(temp9())
+    req(temp7())
+    
+    catalogo_licenciatura <- temp9() |>
+      mutate(
+        semestre_grupo = stringr::str_squish(as.character(semestre_grupo)),
+        asignatura = stringr::str_squish(as.character(asignatura))
+      )
+    
+    asignaturas_adjudicadas <- temp7() |>
+      mutate(
+        semestre_grupo = stringr::str_squish(as.character(semestre_grupo)),
+        asignatura = stringr::str_squish(as.character(asignatura))
+      ) |>
+      distinct(semestre_grupo, asignatura)
+    
+    anti_join(
+      catalogo_licenciatura,
+      asignaturas_adjudicadas,
+      by = c("semestre_grupo", "asignatura")
+    )
   })
-  
-  #----------------- outputs (puedes mantener renderTable o pasar a gt) -------------
-  # output$tabla1 <- renderTable({ temp2() })
-  # output$tabla2 <- renderTable({ temp4() })
-  # output$tabla3 <- renderTable({ temp5() })
-  # output$tabla4 <- renderTable({ temp7() })
-  # output$tabla5 <- renderTable({ temp8() })
-  # output$tabla6 <- renderTable({ temp10() })
-  #----------------- outputs GT ----------------------------------------------------
   
   #----------------- outputs DT ----------------------------------------------------
   
