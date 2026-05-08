@@ -12,16 +12,17 @@ library(stringr)
 library(scholar)
 library(purrr)
 library(janitor)
+library(openxlsx)
 
 # funciones preliminares --------------------------------------------------
 
 leer_formulario <- function(path_csv) {
   
   # ============================================================
-  # 1. LEER CSV (todo como texto excepto marca temporal)
+  # 1. LEER CSV (desactivado, solo para probar fuera de la app)
   # ============================================================
   
-  df_raw <- readr::read_csv(path_csv, show_col_types = FALSE)
+  #df_raw <- readr::read_csv(path_csv, show_col_types = FALSE)
   
   # ============================================================
   # 2. RENOMBRAR COLUMNAS USANDO PATRONES
@@ -577,7 +578,6 @@ valores <- function(temp2 = NULL, df = NULL, rubrica, catalogo_perfiles) {
   )
 }
 
-#hasta acá llegué
 nomina <- function(x) {
   
   adjudicados <- x
@@ -787,10 +787,9 @@ ui <- fluidPage(
   
   sidebarLayout(
     sidebarPanel(
-      wellPanel(
-        p(strong("1. Preparación de datos")),
-        fileInput("file", "Cargar formulario", accept = ".xlsx", multiple = TRUE),
-        actionButton("tidy", "Ordenar solicitudes")
+      wellPanel(p(strong("1. Preparación de datos")),
+                fileInput("file", "Cargar formulario", accept = ".csv"),
+                actionButton("tidy", "Ordenar solicitudes")
       ),
       wellPanel(
         p(strong("2. Aplicación de rúbrica")),
@@ -883,121 +882,22 @@ server <- function(input, output, session) {
   # 1. Cargar formulario sin procesar
   temp1 <- reactive({
     infile <- input$file
-    import(infile$datapath, col_types = "text")
+    req(infile)
+    
+    raw_text <- readr::read_file(infile$datapath)
+    
+    readr::read_csv(
+      raw_text,
+      col_types = readr::cols(.default = "c")
+    )
   })
   
-  # 2. Modificar formulario (sin h-index)
+  
+  # 2. Modificar formulario
   temp2 <- eventReactive(input$tidy, {
     withProgress(message = 'Ordenando solicitudes...', value = 0, {
-      temp1() |>
-        mutate(id_solicitud = as.character(1:nrow(temp1()))) |>
-        relocate(id_solicitud, .before = `Marca temporal`) |>
-        # ajusta nombres de columnas según tu archivo actual
-        dplyr::rename(
-          marca = `Marca temporal`,
-          correo_respuesta = `Dirección de correo electrónico`,
-          aplica_convocatoria = `¿Quieres aplicar a la Convocatoria?`,
-          semestre_grupo = `Por favor, indica el semestre y grupo en el que solicitas impartir la asignatura`,
-          asignatura_1 = `Elige la asignatura`,
-          asignatura_2 = `Elige la asignatura 2`,
-          asignatura_3 = `Elige la asignatura 3`,
-          asignatura_4 = `Elige la asignatura 4`,
-          asignatura_5 = `Elige la asignatura 5`,
-          asignatura_6 = `Elige la asignatura 6`,
-          pdf_solicitud = `Anexar solicitud de la asignatura en formato PDF dirigida al Dr. David Romero, Coordinador de la Licenciatura en Ciencias Ambientales de la ENES Mérida.`,
-          pdf_plan_instr = `Anexar el plan instruccional de la asignatura definiendo los objetivos,  la planeación del programa a impartir (en caso de plantear modificaciones con respecto al plan original),  estrategia de enseñanza, criterios de evaluación y bibliografía sugerida sobre el contenido de la asignatura.`,
-          pdf_practicas_campo = `Anexar resumen de prácticas de campo`,
-          pdf_practicas_lab = `Anexar resumen de prácticas de laboratorio`,
-          
-          profesor_p1 = `Nombre completo (sin grados académicos ni abreviaturas)`,
-          rfc_p1 = `RFC`,
-          curp_p1 = `CURP`,
-          num_trabajador_p1 = `Número de trabajador UNAM (utilice 0 si no aplica)`,
-          correo_unam_p1 = `Correo UNAM (Use el personal en caso de no contar)`,
-          correo_personal_p1 = `Correo personal`,
-          telefono_p1 = `Número de teléfono`,
-          nombramiento_p1 = `Nombramiento`,
-          adscripcion_p1 = `Adscripción`,
-          horas_teoricas_p1 = `Carga horaria semanal, horas teóricas`,
-          horas_practicas_p1 = `Carga horaria semanal, horas prácticas (elegir 0 si en el temario de la asignatura se indica como tipo teórica)`,
-          nivel_estudios_p1 = `Último nivel de estudios`,
-          perfil_form_p1 = `Perfil de formación profesional`,
-          antiguedad_p1 = `Antigüedad impartiendo esta asignatura en esta licenciatura`,
-          experiencia_similar_p1 = `Experiencia impartiendo asignaturas similares en otros programas de licenciatura`,
-          papime_resp_p1 = `Responsable de proyectos PAPIME en la enseñanza de esta asignatura o asignatura afín`,
-          papime_part_p1 = `Participación en proyectos PAPIME en la enseñanza de esta asignatura o asignatura afín`,
-          cursos_p1 = `Número de Cursos de Actualización Docente con duración superior a 20 horas en los últimos 5 años`,
-          inv_resp_p1 = `Proyectos de Investigación con financiamiento en el campo de conocimiento de la asignatura, de los que ha sido Responsable Técnico o Coordinador:`,
-          inv_part_p1 = `Proyectos de Investigación con financiamiento en el campo de conocimiento de la asignatura, de los que ha sido Participante:`,
-          cons_resp_p1 = `Proyectos de Servicio o Consultoría en el campo de conocimiento de la asignatura, de los que ha sido Responsable Técnico o Coordinador:`,
-          cons_part_p1 = `Proyectos de Servicio o Consultoría en el campo de conocimiento de la asignatura, de los que ha sido Participante:`,
-          productos_p1 = `Productos académicos, técnicos o profesionales relevantes para la asignatura`,
-          pdf_cv_p1 = `Resumen curricular actualizado en PDF`,
-          
-          agrega_p2 = `¿Agregará a un 2do profesor?`,
-          profesor_p2 = `Nombre completo (sin grados académicos ni abreviaturas) 2`,
-          rfc_p2 = `RFC 2`,
-          curp_p2 = `CURP 2`,
-          num_trabajador_p2 = `Número de trabajador UNAM (utilice 0 si no aplica) 2`,
-          correo_unam_p2 = `Correo UNAM (Use el personal en caso de no contar) 2`,
-          correo_personal_p2 = `Correo personal 2`,
-          telefono_p2 = `Número de teléfono 2`,
-          nombramiento_p2 = `Nombramiento 2`,
-          adscripcion_p2 = `Adscripción 2`,
-          horas_teoricas_p2 = `Carga horaria semanal, horas teóricas 2`,
-          horas_practicas_p2 = `Carga horaria semanal, horas prácticas (elegir 0 si en el temario de la asignatura se indica como tipo teórica) 2`,
-          nivel_estudios_p2 = `Último nivel de estudios 2`,
-          perfil_form_p2 = `Perfil de formación profesional 2`,
-          antiguedad_p2 = `Antigüedad impartiendo esta asignatura en esta licenciatura 2`,
-          experiencia_similar_p2 = `Experiencia impartiendo asignaturas similares en otros programas de licenciatura 2`,
-          papime_resp_p2 = `Responsable de proyectos PAPIME en la enseñanza de esta asignatura o asignatura afín 2`,
-          papime_part_p2 = `Participación en proyectos PAPIME en la enseñanza de esta asignatura o asignatura afín 2`,
-          cursos_p2 = `Número de Cursos de Actualización Docente con duración superior a 20 horas en los últimos 5 años 2`,
-          inv_resp_p2 = `Proyectos de Investigación con financiamiento en el campo de conocimiento de la asignatura, de los que ha sido Responsable Técnico o Coordinador: 2`,
-          inv_part_p2 = `Proyectos de Investigación con financiamiento en el campo de conocimiento de la asignatura, de los que ha sido Participante: 2`,
-          cons_resp_p2 = `Proyectos de Servicio o Consultoría en el campo de conocimiento de la asignatura, de los que ha sido Responsable Técnico o Coordinador: 2`,
-          cons_part_p2 = `Proyectos de Servicio o Consultoría en el campo de conocimiento de la asignatura, de los que ha sido Participante: 2`,
-          productos_p2 = `Productos académicos, técnicos o profesionales relevantes para la asignatura  2`,
-          pdf_cv_p2 = `Resumen curricular actualizado en PDF 2`,
-          
-          agrega_p3 = `¿Agregará a un tercer profesor?`,
-          profesor_p3 = `Nombre completo (sin grados académicos ni abreviaturas) 3`,
-          rfc_p3 = `RFC 3`,
-          curp_p3 = `CURP 3`,
-          num_trabajador_p3 = `Número de trabajador UNAM (utilice 0 si no aplica) 3`,
-          correo_unam_p3 = `Correo UNAM (Use el personal en caso de no contar) 3`,
-          correo_personal_p3 = `Correo personal 3`,
-          telefono_p3 = `Número de teléfono 3`,
-          nombramiento_p3 = `Nombramiento 3`,
-          adscripcion_p3 = `Adscripción 3`,
-          horas_teoricas_p3 = `Carga horaria semanal, horas teóricas 3`,
-          horas_practicas_p3 = `Carga horaria semanal, horas prácticas (elegir 0 si en el temario de la asignatura se indica como tipo teórica) 3`,
-          nivel_estudios_p3 = `Último nivel de estudios 3`,
-          perfil_form_p3 = `Perfil de formación profesional 3`,
-          antiguedad_p3 = `Antigüedad impartiendo esta asignatura en esta licenciatura 3`,
-          experiencia_similar_p3 = `Experiencia impartiendo asignaturas similares en otros programas de licenciatura 3`,
-          papime_resp_p3 = `Responsable de proyectos PAPIME en la enseñanza de esta asignatura o asignatura afín 3`,
-          papime_part_p3 = `Participación en proyectos PAPIME en la enseñanza de esta asignatura o asignatura afín 3`,
-          cursos_p3 = `Número de Cursos de Actualización Docente con duración superior a 20 horas en los últimos 5 años 3`,
-          inv_resp_p3 = `Proyectos de Investigación con financiamiento en el campo de conocimiento de la asignatura, de los que ha sido Responsable Técnico o Coordinador: 3`,
-          inv_part_p3 = `Proyectos de Investigación con financiamiento en el campo de conocimiento de la asignatura, de los que ha sido Participante: 3`,
-          cons_resp_p3 = `Proyectos de Servicio o Consultoría en el campo de conocimiento de la asignatura, de los que ha sido Responsable Técnico o Coordinador: 3`,
-          cons_part_p3 = `Proyectos de Servicio o Consultoría en el campo de conocimiento de la asignatura, de los que ha sido Participante: 3`,
-          productos_p3 = `Productos académicos, técnicos o profesionales relevantes para la asignatura  3`,
-          pdf_cv_p3 = `Resumen curricular actualizado en PDF 3`
-        ) |>
-        # aquí va tu lógica de pivot_longer/pivot_wider original,
-        # pero sin columnas de Google Scholar
-        pivot_longer(
-          cols = starts_with("asignatura_"),
-          names_to  = "variable",
-          values_to = "asignatura"
-        ) |>
-        drop_na(asignatura) |>
-        group_by(marca, semestre_grupo, variable) |>
-        mutate(fila = row_number()) |>
-        ungroup()
-    })
+     leer_formulario(temp1())
+            })
   })
   
   # 3. Cargar rúbrica
@@ -1028,7 +928,7 @@ server <- function(input, output, session) {
       incProgress(0.3, detail = "Evaluando profesores")
       
       out <- valores(
-        temp2 = temp2(),
+        df = temp2(),
         rubrica = rubrica(),
         catalogo_perfiles = catalogo()
       )
@@ -1069,18 +969,25 @@ server <- function(input, output, session) {
   
   
   # 6. Estimación/adjudicación de cada solicitud ------------------------------
-  # Esta sección ya NO recalcula el promedio ponderado.
-  # Usa directamente valores()$por_solicitud, donde ya viene PTS_SOLICITUD.
-  
+
   temp5 <- eventReactive(input$total, {
     
     req(valoracion())
     
     valoracion()$por_solicitud |>
       dplyr::ungroup() |>
+      
+      # 1. Insertar columna vacía para el CA
+      dplyr::mutate(
+        Pts_opinionCA = NA_real_
+      ) |>
+      
+      # 2. total = PTS_SOLICITUD (sin sumar opinión del CA)
       dplyr::mutate(
         total = PTS_SOLICITUD
       ) |>
+      
+      # 3. Ordenar y adjudicar como antes
       dplyr::group_by(semestre_grupo, asignatura) |>
       dplyr::arrange(
         semestre_grupo,
@@ -1268,7 +1175,7 @@ server <- function(input, output, session) {
       vroom::vroom_write(temp5(), file , delim = ",", bom = TRUE)
     }
   )
-  
+
   output$descarga3 <- downloadHandler(
     filename = "datos_adjudicados.csv",
     content = function(file) {
