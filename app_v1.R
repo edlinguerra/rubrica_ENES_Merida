@@ -16,7 +16,22 @@ library(openxlsx)
 
 # funciones preliminares --------------------------------------------------
 
-leer_formulario <- function(path_csv) {
+normalizar_productos <- function(x) {
+  
+  x_chr <- as.character(x)
+  x_chr <- stringr::str_squish(x_chr)
+  x_chr <- stringr::str_to_lower(x_chr)
+  x_chr <- chartr("áéíóú", "aeiou", x_chr)
+  
+  dplyr::case_when(
+    is.na(x_chr) | x_chr == "" ~ NA_real_,
+    stringr::str_detect(x_chr, "11\\s*o\\s*mas") ~ 11,
+    stringr::str_detect(x_chr, "11\\+") ~ 11,
+    TRUE ~ suppressWarnings(as.numeric(stringr::str_extract(x_chr, "[0-9]+")))
+  )
+}
+
+leer_formulario <- function(df_raw) {
   
   # ============================================================
   # 1. LEER CSV (desactivado, solo para probar fuera de la app)
@@ -220,25 +235,6 @@ valores <- function(temp2 = NULL, df = NULL, rubrica, catalogo_perfiles) {
   } else {
     
     datos <- df
-  }
-  
-  # ------------------------------------------------------------
-  # 0A. Función para normalizar productos de experiencia
-  # ------------------------------------------------------------
-  
-  normalizar_productos <- function(x) {
-    
-    x_chr <- as.character(x)
-    x_chr <- stringr::str_squish(x_chr)
-    x_chr <- stringr::str_to_lower(x_chr)
-    x_chr <- chartr("áéíóú", "aeiou", x_chr)
-    
-    dplyr::case_when(
-      is.na(x_chr) | x_chr == "" ~ NA_real_,
-      stringr::str_detect(x_chr, "11\\s*o\\s*mas") ~ 11,
-      stringr::str_detect(x_chr, "11\\+") ~ 11,
-      TRUE ~ suppressWarnings(as.numeric(stringr::str_extract(x_chr, "[0-9]+")))
-    )
   }
   
   # ------------------------------------------------------------
@@ -806,7 +802,7 @@ ui <- fluidPage(
       ),
       wellPanel(
         p(strong("4. Asignaturas desiertas")),
-        fileInput("file4", label = "Cargar catálogo de la licenciatura", accept = ".xlsx"),
+        #fileInput("file4", label = "Cargar catálogo de la licenciatura", accept = ".xlsx"),
         actionButton("desierto", "Identificar desiertas")
       )
     ),
