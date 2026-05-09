@@ -13,6 +13,8 @@ library(scholar)
 library(purrr)
 library(janitor)
 library(openxlsx)
+library(officer)
+library(flextable)
 
 # funciones preliminares --------------------------------------------------
 
@@ -679,6 +681,264 @@ nomina <- function(x) {
   return(xx)
 }
 
+nomina_compacta <- function(x) {
+  
+  adjudicados <- x
+  
+  # ------------------------------------------------------------
+  # Validación mínima
+  # ------------------------------------------------------------
+  
+  cols_necesarias <- c(
+    "semestre_grupo",
+    "asignatura",
+    "profesor",
+    "nivel_estudios",
+    "nombramiento",
+    "rfc",
+    "num_trabajador",
+    "correo_unam",
+    "correo_personal",
+    "horas_teoricas",
+    "horas_practicas"
+  )
+  
+  cols_faltantes <- setdiff(cols_necesarias, names(adjudicados))
+  
+  if (length(cols_faltantes) > 0) {
+    stop(
+      "Faltan columnas necesarias para generar el documento de nómina: ",
+      paste(cols_faltantes, collapse = ", ")
+    )
+  }
+  
+  # ------------------------------------------------------------
+  # Helpers
+  # ------------------------------------------------------------
+  
+  to_num <- function(x) {
+    suppressWarnings(as.numeric(gsub(",", ".", as.character(x))))
+  }
+  
+  limpiar_txt <- function(x) {
+    x <- stringr::str_squish(as.character(x))
+    x[x %in% c("", "NA", "NaN", "NULL")] <- NA_character_
+    x
+  }
+  
+  colapsar_datos <- function(x) {
+    x <- limpiar_txt(x)
+    x <- x[!is.na(x)]
+    paste(x, collapse = "\n")
+  }
+  
+  recodificar_nombramiento <- function(x) {
+    dplyr::recode(
+      limpiar_txt(x),
+      "UNAM - Profesor" = "Profesor Tiempo Completo",
+      "Profesor de Asignatura" = "Profesor de Asignatura",
+      "UNAM -  Investigador" = "Investigador Tiempo Completo",
+      "UNAM - Investigador" = "Investigador Tiempo Completo",
+      "Profesor Honorífico" = "Profesor Honorífico",
+      "UNAM - Técnico Académico" = "Técnico Académico",
+      .default = limpiar_txt(x)
+    )
+  }
+  
+  # ------------------------------------------------------------
+  # Construir tabla compacta
+  # ------------------------------------------------------------
+  
+  tabla <- adjudicados |>
+    dplyr::mutate(
+      semestre_grupo_out = stringr::str_remove(
+        as.character(semestre_grupo),
+        "LCA, semestre\\s*"
+      ),
+      asignatura_out = limpiar_txt(asignatura),
+      profesor_out = limpiar_txt(profesor),
+      estudios_out = limpiar_txt(nivel_estudios),
+      nombramiento_out = recodificar_nombramiento(nombramiento),
+      rfc_out = limpiar_txt(rfc),
+      unam_out = limpiar_txt(num_trabajador),
+      correo_unam_out = limpiar_txt(correo_unam),
+      correo_personal_out = limpiar_txt(correo_personal),
+      correo_out = dplyr::if_else(
+        stringr::str_detect(
+          dplyr::coalesce(correo_unam_out, ""),
+          stringr::regex("unam\\.mx", ignore_case = TRUE)
+        ),
+        correo_unam_out,
+        correo_personal_out
+      ),
+      HT = tidyr::replace_na(to_num(horas_teoricas), 0),
+      HP = tidyr::replace_na(to_num(horas_practicas), 0)
+    ) |>
+    dplyr::group_by(
+      semestre_grupo_out,
+      asignatura_out,
+      profesor_out,
+      estudios_out,
+      nombramiento_out,
+      rfc_out,
+      unam_out,
+      correo_out
+    ) |>
+    dplyr::summarise(
+      HT = sum(HT, na.rm = TRUE),
+      HP = sum(HP, na.rm = TRUE),
+      .groups = "drop"
+    ) |>
+    dplyr::mutate(
+      `Carga Horaria` = HT + HP,
+      `Horas Pagadas` = dplyr::if_else(
+        nombramiento_out == "Profesor de Asignatura",
+        `Carga Horaria`,
+        0
+      ),
+      Datos = purrr::pmap_chr(
+        list(
+          estudios_out,
+          nombramiento_out,
+          rfc_out,
+          unam_out,
+          correo_out
+        ),
+        ~ colapsar_datos(c(...))
+      )
+    ) |>
+    dplyr::transmute(
+      `Semestre/Grupo` = semestre_grupo_out,
+      Asignatura = asignatura_out,
+      `Profesor(a)` = profesor_out,
+      Datos = Datos,
+      `Carga Horaria` = `Carga Horaria`,
+      HT = HT,
+      HP = HP,
+      `Horas Pagadas` = `Horas Pagadas`
+    ) |>
+    dplyr::arrange(`Semestre/Grupo`, Asignatura, `Profesor(a)`)
+  
+  return(tabla)
+}
+
+crear_docx_nomina <- function(adjudicados, file) {
+  
+  tabla <- nomina_compacta(adjudicados)
+  
+  # ------------------------------------------------------------
+  # Documento Word en orientación horizontal
+  # ------------------------------------------------------------
+  
+  doc <- officer::read_docx()
+  
+  seccion_horizontal <- officer::prop_section(
+    page_size = officer::page_size(orient = "landscape"),
+    page_margins = officer::page_mar(
+      top = 0.5,
+      bottom = 0.5,
+      left = 0.5,
+      right = 0.5
+    )
+  )
+  
+  doc <- officer::body_set_default_section(
+    doc,
+    value = seccion_horizontal
+  )
+  
+  doc <- officer::body_add_par(
+    doc,
+    "Datos para nómina",
+    style = "heading 1"
+  )
+  
+  doc <- officer::body_add_par(
+    doc,
+    paste0("Generado el ", format(Sys.Date(), "%d/%m/%Y")),
+    style = "Normal"
+  )
+  
+  doc <- officer::body_add_par(doc, "", style = "Normal")
+  
+  # ------------------------------------------------------------
+  # Si no hay adjudicados
+  # ------------------------------------------------------------
+  
+  if (nrow(tabla) == 0) {
+    
+    doc <- officer::body_add_par(
+      doc,
+      "No hay registros adjudicados para generar la nómina.",
+      style = "Normal"
+    )
+    
+    print(doc, target = file)
+    return(invisible(file))
+  }
+  
+  # ------------------------------------------------------------
+  # Tabla Word
+  # ------------------------------------------------------------
+  
+  ft <- flextable::flextable(tabla)
+  
+  filas_azules <- seq(2, nrow(tabla), by = 2)
+  
+  ft <- ft |>
+    flextable::theme_vanilla() |>
+    flextable::bg(i = filas_azules, bg = "#D9EAF7", part = "body") |>
+    flextable::fontsize(size = 8, part = "all") |>
+    flextable::fontsize(size = 8, part = "header") |>
+    flextable::bold(part = "header") |>
+    flextable::align(align = "center", part = "header") |>
+    flextable::align(
+      j = c("Carga Horaria", "HT", "HP", "Horas Pagadas"),
+      align = "center",
+      part = "body"
+    ) |>
+    flextable::align(
+      j = c("Semestre/Grupo", "Asignatura", "Profesor(a)", "Datos"),
+      align = "left",
+      part = "body"
+    ) |>
+    flextable::valign(valign = "top", part = "all") |>
+    flextable::padding(padding = 3, part = "all") |>
+    flextable::line_spacing(space = 1, part = "all") |>
+    flextable::width(j = "Semestre/Grupo", width = 0.8) |>
+    flextable::width(j = "Asignatura", width = 2.2) |>
+    flextable::width(j = "Profesor(a)", width = 1.8) |>
+    flextable::width(j = "Datos", width = 3.1) |>
+    flextable::width(j = "Carga Horaria", width = 0.8) |>
+    flextable::width(j = "HT", width = 0.5) |>
+    flextable::width(j = "HP", width = 0.5) |>
+    flextable::width(j = "Horas Pagadas", width = 0.8) |>
+    flextable::set_table_properties(
+      layout = "fixed",
+      width = 1
+    )
+  
+  ft <- ft |>
+    flextable::border_outer(
+      border = officer::fp_border(color = "#000000", width = 0.75),
+      part = "all"
+    ) |>
+    flextable::border_inner_h(
+      border = officer::fp_border(color = "#BFBFBF", width = 0.5),
+      part = "all"
+    ) |>
+    flextable::border_inner_v(
+      border = officer::fp_border(color = "#BFBFBF", width = 0.5),
+      part = "all"
+    )
+  
+  doc <- flextable::body_add_flextable(doc, ft)
+  
+  print(doc, target = file)
+  
+  invisible(file)
+}
+
 # ------------------------------------------------------------
 # Formato para las tablas
 # ------------------------------------------------------------
@@ -858,7 +1118,9 @@ ui <- fluidPage(
         tabPanel(
           "Nómina",
           DTOutput("tabla5"),
-          downloadButton("descarga4", label = "Descarga")
+          br(),
+          # downloadButton("descarga4", label = "Descargar CSV"),
+          downloadButton("descarga4_docx", label = "Descargar Word")
         ),
         tabPanel(
           "Desiertas",
@@ -1222,6 +1484,43 @@ server <- function(input, output, session) {
     filename = "datos_nomina.csv",
     content = function(file) {
       vroom::vroom_write(temp8(), file , delim = ",", bom = TRUE)
+    }
+  )
+  
+  output$descarga4_docx <- downloadHandler(
+    filename = function() {
+      paste0("datos_nomina_", format(Sys.Date(), "%Y%m%d"), ".docx")
+    },
+    contentType = "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    content = function(file) {
+      
+      req(temp7())
+      
+      tryCatch(
+        {
+          crear_docx_nomina(
+            adjudicados = temp7(),
+            file = file
+          )
+          
+          if (!file.exists(file)) {
+            stop("La función crear_docx_nomina() terminó, pero no creó el archivo esperado.")
+          }
+          
+          if (file.info(file)$size == 0) {
+            stop("La función crear_docx_nomina() creó un archivo vacío.")
+          }
+        },
+        error = function(e) {
+          message("ERROR al generar el DOCX de nómina: ", conditionMessage(e))
+          showNotification(
+            paste("Error al generar el Word:", conditionMessage(e)),
+            type = "error",
+            duration = 10
+          )
+          stop(e)
+        }
+      )
     }
   )
   
