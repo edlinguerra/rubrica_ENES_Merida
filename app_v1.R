@@ -1081,14 +1081,13 @@ server <- function(input, output, session) {
   })
   
   # 8. Desiertas -------------------------------------------------------------
-  
   temp9 <- reactive({
     
-    req(input$file4)
+    req(input$file_cat)
     
-    infile4 <- input$file4
+    infile_cat <- input$file_cat
     
-    import(infile4$datapath) |>
+    import(infile_cat$datapath, sheet = "catalogo") |>
       janitor::clean_names() |>
       mutate(
         semestre_grupo = stringr::str_squish(as.character(semestre_grupo)),
@@ -1096,6 +1095,21 @@ server <- function(input, output, session) {
       ) |>
       distinct(semestre_grupo, asignatura, .keep_all = TRUE)
   })
+  
+  # temp9 <- reactive({
+  #   
+  #   req(input$file4)
+  #   
+  #   infile4 <- input$file4
+  #   
+  #   import(infile4$datapath) |>
+  #     janitor::clean_names() |>
+  #     mutate(
+  #       semestre_grupo = stringr::str_squish(as.character(semestre_grupo)),
+  #       asignatura = stringr::str_squish(as.character(asignatura))
+  #     ) |>
+  #     distinct(semestre_grupo, asignatura, .keep_all = TRUE)
+  # })
   
   temp10 <- eventReactive(input$desierto, {
     
@@ -1121,6 +1135,31 @@ server <- function(input, output, session) {
       by = c("semestre_grupo", "asignatura")
     )
   })
+  
+  # temp10 <- eventReactive(input$desierto, {
+  #   
+  #   req(temp9())
+  #   req(temp7())
+  #   
+  #   catalogo_licenciatura <- temp9() |>
+  #     mutate(
+  #       semestre_grupo = stringr::str_squish(as.character(semestre_grupo)),
+  #       asignatura = stringr::str_squish(as.character(asignatura))
+  #     )
+  #   
+  #   asignaturas_adjudicadas <- temp7() |>
+  #     mutate(
+  #       semestre_grupo = stringr::str_squish(as.character(semestre_grupo)),
+  #       asignatura = stringr::str_squish(as.character(asignatura))
+  #     ) |>
+  #     distinct(semestre_grupo, asignatura)
+  #   
+  #   anti_join(
+  #     catalogo_licenciatura,
+  #     asignaturas_adjudicadas,
+  #     by = c("semestre_grupo", "asignatura")
+  #   )
+  # })
   
   #----------------- outputs DT ----------------------------------------------------
   
