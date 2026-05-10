@@ -45,6 +45,12 @@ leer_formulario <- function(df_raw) {
   # 2. RENOMBRAR COLUMNAS USANDO PATRONES
   # ============================================================
   
+  # Detectar todas las columnas que empiezan con "Elige la asignatura"
+  cols_asignaturas <- grep("^Elige la asignatura", names(df_raw), value = TRUE)
+  
+  # Crear nombres nuevos: asignatura_1, asignatura_2, ...
+  nuevos_nombres <- paste0("asignatura_", seq_along(cols_asignaturas))
+  
   df <- df_raw |>
     rename(
       # Datos generales
@@ -54,12 +60,7 @@ leer_formulario <- function(df_raw) {
       semestre_grupo     = matches("^Por favor, indica el semestre"),
       
       # Asignaturas
-      asignatura_1       = matches("^Elige la asignatura\\.\\.\\.5$"),
-      asignatura_2       = matches("^Elige la asignatura\\.\\.\\.6$"),
-      asignatura_3       = matches("^Elige la asignatura\\.\\.\\.7$"),
-      asignatura_4       = matches("^Elige la asignatura\\.\\.\\.8$"),
-      asignatura_5       = matches("^Elige la asignatura\\.\\.\\.9$"),
-      asignatura_6       = matches("^Elige la asignatura\\.\\.\\.10$"),
+      !!!setNames(cols_asignaturas, nuevos_nombres),
       
       # PDFs generales
       pdf_solicitud      = matches("^Anexar solicitud"),
