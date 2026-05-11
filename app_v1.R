@@ -285,13 +285,7 @@ leer_formulario <- function(df_raw) {
 }
 
 valores <- function(temp2 = NULL, df = NULL, rubrica, catalogo_perfiles) {
-  
-  library(dplyr)
-  library(tidyr)
-  library(stringr)
-  library(purrr)
-  library(janitor)
-  
+
   # ============================================================
   # 0. NORMALIZAR ENTRADA
   # ============================================================
