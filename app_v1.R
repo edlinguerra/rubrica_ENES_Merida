@@ -15,6 +15,8 @@ library(janitor)
 library(openxlsx)
 library(officer)
 library(flextable)
+library(ggplot2)
+library(scales)
 
 # funciones preliminares --------------------------------------------------
 
@@ -1105,6 +1107,28 @@ ui <- fluidPage(
           font-size: 22px;
         }
       }
+      
+      .dash-card {
+  background: #f5f9fc;
+  border-left: 5px solid #1f77b4;
+  border-radius: 8px;
+  padding: 16px;
+  min-height: 115px;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.12);
+}
+
+.dash-card h4 {
+  margin-top: 0;
+  color: #2c3e50;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.dash-card h2 {
+  margin-bottom: 0;
+  color: #1f77b4;
+  font-weight: 700;
+}
     "))
   ),
   
@@ -1193,6 +1217,58 @@ ui <- fluidPage(
           "Desiertas",
           DTOutput("tabla6"),
           downloadButton("descarga5", label = "Descarga")
+        ),
+        tabPanel(
+          "Dashboard carga docente",
+          
+          fluidRow(
+            column(3, div(class = "dash-card", h4("Asignaturas adjudicadas"), h2(textOutput("kpi_asignaturas")))),
+            column(3, div(class = "dash-card", h4("Profesores"), h2(textOutput("kpi_profesores")))),
+            column(3, div(class = "dash-card", h4("Horas totales"), h2(textOutput("kpi_horas")))),
+            column(3, div(class = "dash-card", h4("Horas pagadas"), h2(textOutput("kpi_pagadas"))))
+          ),
+          
+          br(),
+          
+          fluidRow(
+            column(
+              6,
+              wellPanel(
+                h4("Carga por profesor"),
+                selectizeInput(
+                  "profesores_dash",
+                  "Profesores a visualizar",
+                  choices = NULL,
+                  multiple = TRUE,
+                  options = list(placeholder = "Todos los profesores")
+                ),
+                plotOutput("plot_carga_profesor", height = "420px")
+              )
+            ),
+            column(
+              6,
+              wellPanel(
+                h4("Carga por semestre/grupo"),
+                plotOutput("plot_carga_semestre", height = "420px")
+              )
+            )
+          ),
+          
+          fluidRow(
+            column(
+              12,
+              wellPanel(
+                h4("Resumen por profesor"),
+                DT::DTOutput("tabla_resumen_profesor")
+              )
+            )
+          ),
+          
+          fluidRow(
+            column(4, wellPanel(h4("Profesores con carga alta"), DT::DTOutput("alerta_carga_alta"))),
+            column(4, wellPanel(h4("Asignaturas sin horas"), DT::DTOutput("alerta_sin_horas"))),
+            column(4, wellPanel(h4("Distribución extraña"), DT::DTOutput("alerta_distribucion")))
+          )
         )
       )
     )
@@ -1597,6 +1673,156 @@ server <- function(input, output, session) {
       vroom::vroom_write(temp10(), file , delim = ",", bom = TRUE)
     }
   )
+  
+  ###########################
+  # Lógica del dashboard ====
+  ###########################
+  
+  dashboard_base <- reactive({
+    req(temp7())
+    
+    temp7() |>
+      mutate(
+        HT = suppressWarnings(as.numeric(horas_teoricas)),
+        HP = suppressWarnings(as.numeric(horas_practicas)),
+        HT = tidyr::replace_na(HT, 0),
+        HP = tidyr::replace_na(HP, 0),
+        carga_total = HT + HP,
+        horas_pagadas = if_else(
+          nombramiento == "Profesor de Asignatura",
+          carga_total,
+          0
+        )
+      )
+  })
+  
+  dashboard_profesores <- reactive({
+    dashboard_base() |>
+      group_by(profesor, nombramiento) |>
+      summarise(
+        asignaturas = n_distinct(asignatura),
+        HT = sum(HT, na.rm = TRUE),
+        HP = sum(HP, na.rm = TRUE),
+        carga_total = sum(carga_total, na.rm = TRUE),
+        horas_pagadas = sum(horas_pagadas, na.rm = TRUE),
+        .groups = "drop"
+      ) |>
+      arrange(desc(carga_total))
+  })
+  
+  dashboard_asignaturas <- reactive({
+    dashboard_base() |>
+      group_by(semestre_grupo, asignatura) |>
+      summarise(
+        profesores = n_distinct(profesor),
+        HT = sum(HT, na.rm = TRUE),
+        HP = sum(HP, na.rm = TRUE),
+        carga_total = sum(carga_total, na.rm = TRUE),
+        horas_pagadas = sum(horas_pagadas, na.rm = TRUE),
+        .groups = "drop"
+      )
+  })
+  
+  observe({
+    req(dashboard_profesores())
+    
+    updateSelectizeInput(
+      session,
+      "profesores_dash",
+      choices = dashboard_profesores()$profesor,
+      selected = character(0),
+      server = TRUE
+    )
+  })
+  
+  output$kpi_asignaturas <- renderText({
+    dashboard_asignaturas() |> nrow()
+  })
+  
+  output$kpi_profesores <- renderText({
+    dashboard_profesores() |> nrow()
+  })
+  
+  output$kpi_horas <- renderText({
+    sum(dashboard_base()$carga_total, na.rm = TRUE)
+  })
+  
+  output$kpi_pagadas <- renderText({
+    sum(dashboard_base()$horas_pagadas, na.rm = TRUE)
+  })
+  
+  ## Gráfcos del dashboard ----
+  output$plot_carga_profesor <- renderPlot({
+    req(dashboard_profesores())
+    
+    datos <- dashboard_profesores()
+    
+    if (length(input$profesores_dash) > 0) {
+      datos <- datos |>
+        filter(profesor %in% input$profesores_dash)
+    }
+    
+    datos |>
+      ggplot(aes(x = reorder(profesor, carga_total), y = carga_total)) +
+      geom_col(fill = "#1f77b4") +
+      coord_flip() +
+      labs(x = NULL, y = "Horas totales") +
+      theme_minimal(base_size = 12)
+  })
+  
+  output$plot_carga_semestre <- renderPlot({
+    req(dashboard_base())
+    
+    dashboard_base() |>
+      group_by(semestre_grupo) |>
+      summarise(
+        carga_total = sum(carga_total, na.rm = TRUE),
+        .groups = "drop"
+      ) |>
+      ggplot(aes(x = semestre_grupo, y = carga_total)) +
+      geom_col(fill = "#56B4E9") +
+      coord_flip() +
+      labs(x = "Semestre/Grupo", y = "Horas totales") +
+      theme_minimal(base_size = 12) +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1))
+  })
+  
+  ## Tablas y alertas ----
+  
+  output$tabla_resumen_profesor <- DT::renderDT({
+    dashboard_profesores() |>
+      DT::datatable(
+        rownames = FALSE,
+        filter = "top",
+        options = list(pageLength = 10, scrollX = TRUE)
+      )
+  })
+  
+  output$alerta_carga_alta <- DT::renderDT({
+    dashboard_profesores() |>
+      filter(carga_total >= 10) |>
+      DT::datatable(rownames = FALSE, options = list(pageLength = 5, scrollX = TRUE))
+  })
+  
+  output$alerta_sin_horas <- DT::renderDT({
+    dashboard_asignaturas() |>
+      filter(carga_total == 0) |>
+      DT::datatable(rownames = FALSE, options = list(pageLength = 5, scrollX = TRUE))
+  })
+  
+  output$alerta_distribucion <- DT::renderDT({
+    dashboard_base() |>
+      group_by(semestre_grupo, asignatura) |>
+      summarise(
+        profesores = n_distinct(profesor),
+        profesores_sin_horas = sum(carga_total == 0, na.rm = TRUE),
+        carga_total = sum(carga_total, na.rm = TRUE),
+        .groups = "drop"
+      ) |>
+      filter(profesores > 1, profesores_sin_horas > 0) |>
+      DT::datatable(rownames = FALSE, options = list(pageLength = 5, scrollX = TRUE))
+  })
+  
 }
 
 # Aplicacion --------------------------------------------------------------
