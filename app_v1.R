@@ -591,14 +591,14 @@ valores <- function(temp2 = NULL, df = NULL, rubrica, catalogo_perfiles) {
         rowSums(across(c(PTS_NOMBRAMIENTO, PTS_ADSCRIPCION, PTS_ESTUDIOS,
                          PTS_PAPIME_RESP, PTS_PAPIME_PART, PTS_CURSOS)),
                 na.rm = TRUE),
-      PTS_ANTIGUEDAD =
+      PTS_ANTI_TOTAL =
         rowSums(across(c(PTS_ANTIGUEDAD, PTS_ANTIG_OTRO)), na.rm = TRUE),
       PTS_EXPERIENCIA =
         rowSums(across(c(PTS_INV_RESP, PTS_INV_PART,
                          PTS_CONS_RESP, PTS_CONS_PART,
                          PTS_PRODUCTOS)), na.rm = TRUE),
       PTS_PROFESOR =
-        PTS_DOCENCIA + PTS_ANTIGUEDAD + PTS_EXPERIENCIA + PTS_PERTINENCIA
+        PTS_DOCENCIA + PTS_ANTI_TOTAL + PTS_EXPERIENCIA + PTS_PERTINENCIA
     )
   
   # ============================================================
